@@ -1,0 +1,75 @@
+{
+  "id": "01-intro",
+  "title": "The Silent Write",
+  "difficulty": "intro",
+  "category": "api-debugging",
+  "estimated_minutes": 15,
+  "stack": [
+    "Node.js",
+    "Express",
+    "JSON file storage"
+  ],
+  "symptom": "Creating a user returns 201 Created, but after a server restart the user is missing.",
+  "objective": "Find why POST /users appears to succeed but data is not persisted correctly.",
+  "environment": {
+    "runtime": "node:18",
+    "start_command": "npm start",
+    "port": 3000,
+    "needs_database": false
+  },
+  "hints": [
+    {
+      "order": 1,
+      "cost": 1,
+      "text": "The relevant files are at this path: '/examples/web-service'."
+    },
+    {
+      "order": 2,
+      "cost": 2,
+      "text": "The user is successfully created during the current server session. What happens to in-memory data when a process restarts?"
+    },
+    {
+      "order": 3,
+      "cost": 3,
+      "text": "There are two separate operations: reading users and writing users. Are they both targeting the same source of truth?"
+    }
+  ],
+  "solution": {
+    "type": "file_diff",
+    "description": "Read and write operations must target the same file. The discrepancy between source filenames causes writes to be lost on restart.",
+    "validation": "POST /users followed by server restart followed by GET /users must return the created user."
+  },
+  "test_cases": [
+    {
+      "id": "tc1",
+      "description": "POST /users creates a user and returns 201",
+      "request": {
+        "method": "POST",
+        "path": "/users",
+        "body": {
+          "name": "Test User",
+          "email": "test@example.com"
+        }
+      },
+      "expected": {
+        "status": 201
+      }
+    },
+    {
+      "id": "tc2",
+      "description": "GET /users returns the created user after restart",
+      "requires_restart": true,
+      "request": {
+        "method": "GET",
+        "path": "/users"
+      },
+      "expected": {
+        "status": 200,
+        "contains_created_user": true
+      }
+    }
+  ],
+  "author": "oncall-team",
+  "license": "MIT",
+  "source": "Based on Express.js open source codebase"
+}
