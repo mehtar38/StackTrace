@@ -1,9 +1,9 @@
 {
-  "id": "01-intro",
+  "id": "01-silent-write",
   "title": "The Silent Write",
   "difficulty": "intro",
-  "category": "api-debugging",
-  "estimated_minutes": 15,
+  "category": "API Debugging",
+  "estimatedMins": 15,
   "stack": [
     "Node.js",
     "Express",
