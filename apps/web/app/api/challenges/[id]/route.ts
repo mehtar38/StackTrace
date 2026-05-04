@@ -11,10 +11,10 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params
-console.log('DIRS:', fs.readdirSync(CHALLENGES_DIR))
-const challengePath = path.join(CHALLENGES_DIR, id, 'challenge.json')
-console.log('LOOKING FOR:', challengePath)
-console.log('FILE EXISTS:', fs.existsSync(challengePath))
+// console.log('DIRS:', fs.readdirSync(CHALLENGES_DIR))
+// const challengePath = path.join(CHALLENGES_DIR, id, 'challenge.json')
+// console.log('LOOKING FOR:', challengePath)
+// console.log('FILE EXISTS:', fs.existsSync(challengePath))
   try {
     const challengePath = path.join(CHALLENGES_DIR, id, 'challenge.json')
 

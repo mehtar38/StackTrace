@@ -1,4 +1,5 @@
 import type { Metadata } from 'next'
+// import "react-resizable-panels/styles.css"
 import './globals.css'
 
 export const metadata: Metadata = {

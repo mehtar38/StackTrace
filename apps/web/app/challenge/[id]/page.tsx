@@ -15,11 +15,11 @@ export default async function ChallengePage({ params }: ChallengePageProps) {
     getChallengeFileTree(id),
   ])
 
-   console.log('challengeRes:', JSON.stringify(challengeRes))
-  console.log('fileTreeRes:', JSON.stringify(fileTreeRes))
+  //  console.log('challengeRes:', JSON.stringify(challengeRes))
+  // console.log('fileTreeRes:', JSON.stringify(fileTreeRes))
 
     if (challengeRes.error || !challengeRes.data) {
-    console.log('NOTFOUND: challenge error', challengeRes.error)
+    // console.log('NOTFOUND: challenge error', challengeRes.error)
     notFound()
   }
 
