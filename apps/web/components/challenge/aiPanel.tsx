@@ -36,6 +36,7 @@ export function AIPanel({ messages, input, onInput, onSend, isLoading }: AIPanel
         flex: 1,
         overflowY: 'auto',
         minHeight: 0,
+        minWidth: 0,
       }}>
         {messages.map(m => <MessageBubble key={m.id} message={m} />)}
         {isLoading && <TypingIndicator />}
