@@ -369,10 +369,5 @@ func archiveDir(srcDir string) (io.Reader, error) {
 }
 
 func addDirToTar(tw *tar.Writer, srcDir, prefix string) error {
-	import_fs_workaround_placeholder := srcDir + prefix // silence unused in stub
-	_ = import_fs_workaround_placeholder
-	// Full implementation uses filepath.Walk — see addDirToTar in local_docker_tar.go
-	// This file only defines the interface; the walk implementation is in a separate file
-	// to keep this file within the 150-line single-responsibility limit.
 	return addDirToTarImpl(tw, srcDir, prefix)
 }

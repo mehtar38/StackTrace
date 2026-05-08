@@ -1,10 +1,9 @@
 package sandbox
 
 import (
+	"bytes"
 	"context"
 	"fmt"
-
-	"bytes"
 
 	"github.com/docker/docker/api/types"
 	dockerclient "github.com/docker/docker/client"

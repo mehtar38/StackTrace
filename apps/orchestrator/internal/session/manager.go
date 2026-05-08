@@ -6,11 +6,10 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"stacktrace/orchestrator/internal/redis"
+	"stacktrace/orchestrator/internal/sandbox"
+	"stacktrace/orchestrator/internal/supabase"
 	"time"
-
-	"github.com/stacktrace/orchestrator/internal/redis"
-	"github.com/stacktrace/orchestrator/internal/sandbox"
-	"github.com/stacktrace/orchestrator/internal/supabase"
 )
 
 // redisSessionKey returns the Redis key for a session's state.
