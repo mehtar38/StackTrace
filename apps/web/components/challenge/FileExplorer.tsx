@@ -1,136 +1,165 @@
 'use client'
 
-import { useState } from 'react'
+// components/challenge/FileExplorer.tsx
+// VS Code-style file tree. Renders file names from the tree at all times.
+// When isLocked=true, selection is disabled and the tree is visually dimmed
+// so the user can see the structure but not access contents.
+
 import type { FileNode } from '@/lib/types'
 
 interface FileExplorerProps {
-  tree: FileNode[]
-  activePath: string
-  onFileSelect: (path: string) => void
+  files: FileNode[]
+  selectedPath: string | null
+  onSelect: (file: FileNode) => void
+  isLocked: boolean
 }
 
-export function FileExplorer({ tree, activePath, onFileSelect }: FileExplorerProps) {
+const LANGUAGE_ICON: Record<string, string> = {
+  javascript:  '󰌞',
+  typescript:  '󰛦',
+  json:        '󰘦',
+  markdown:    '󰍔',
+  python:      '󰌠',
+  go:          '󰟓',
+  plaintext:   '󰈙',
+}
+
+const EXTENSION_ICON: Record<string, string> = {
+  '.js':   '󰌞',
+  '.ts':   '󰛦',
+  '.jsx':  '󰌞',
+  '.tsx':  '󰛦',
+  '.json': '󰘦',
+  '.md':   '󰍔',
+  '.py':   '󰌠',
+  '.go':   '󰟓',
+  '.sh':   '󰆍',
+  '.env':  '󰙪',
+}
+
+function getIcon(file: FileNode): string {
+  if (file.type === 'directory') return '󰉋'
+  if (file.language && LANGUAGE_ICON[file.language]) return LANGUAGE_ICON[file.language]
+  const ext = '.' + file.name.split('.').pop()
+  return EXTENSION_ICON[ext] ?? '󰈙'
+}
+
+export function FileExplorer({ files, selectedPath, onSelect, isLocked }: FileExplorerProps) {
   return (
     <div style={{
-      height: '100%',
+      borderBottom: '1px solid var(--border)',
       background: 'var(--bg-surface)',
+      flexShrink: 0,
+      maxHeight: 200,
       overflowY: 'auto',
-      userSelect: 'none',
     }}>
+      {/* Header */}
       <div style={{
-        padding: '8px 0 4px 12px',
-        fontSize: 11,
-        fontWeight: 500,
-        color: 'var(--text-muted)',
-        letterSpacing: '0.08em',
-        textTransform: 'uppercase',
-        fontFamily: 'var(--font-sans)',
+        padding: '6px 12px',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
       }}>
-        Explorer
+        <span style={{
+          fontSize: 10,
+          fontWeight: 600,
+          letterSpacing: '0.08em',
+          textTransform: 'uppercase',
+          color: 'var(--text-muted)',
+          fontFamily: 'var(--font-sans)',
+        }}>
+          Explorer
+        </span>
+        {isLocked && (
+          <span style={{
+            fontSize: 10,
+            color: 'var(--text-muted)',
+            fontFamily: 'var(--font-mono)',
+          }}>
+            locked
+          </span>
+        )}
       </div>
-      {tree.map(node => (
-        <FileTreeNode
-          key={node.path}
-          node={node}
-          depth={0}
-          activePath={activePath}
-          onSelect={onFileSelect}
-        />
-      ))}
+
+      {/* File list */}
+      <div style={{ paddingBottom: 4 }}>
+        {files.map(file => (
+          <FileRow
+            key={file.path}
+            file={file}
+            isSelected={selectedPath === file.path}
+            isLocked={isLocked}
+            onSelect={onSelect}
+          />
+        ))}
+      </div>
     </div>
   )
 }
 
-interface FileTreeNodeProps {
-  node: FileNode
-  depth: number
-  activePath: string
-  onSelect: (path: string) => void
-}
-
-function FileTreeNode({ node, depth, activePath, onSelect }: FileTreeNodeProps) {
-  const [expanded, setExpanded] = useState(true)
-  const isActive = node.path === activePath
-  const isDir = node.type === 'directory'
-  const indent = 12 + depth * 16
-
-  const handleClick = () => {
-    if (isDir) setExpanded(e => !e)
-    else onSelect(node.path)
-  }
+function FileRow({
+  file,
+  isSelected,
+  isLocked,
+  onSelect,
+}: {
+  file: FileNode
+  isSelected: boolean
+  isLocked: boolean
+  onSelect: (f: FileNode) => void
+}) {
+  const depth = file.path.split('/').length - 2 // indent by directory depth
+  const indent = Math.max(0, depth) * 12 + 12
 
   return (
-    <>
-      <div
-        onClick={handleClick}
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 4,
-          padding: `2px 0 2px ${indent}px`,
-          background: isActive ? 'var(--accent-muted)' : 'transparent',
-          borderLeft: isActive ? '2px solid var(--accent)' : '2px solid transparent',
-          cursor: 'pointer',
-          fontSize: 13,
-          fontFamily: 'var(--font-mono)',
-          color: isActive ? 'var(--text-primary)' : 'var(--text-secondary)',
-          whiteSpace: 'nowrap',
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-          minHeight: 22,
-        }}
-        onMouseEnter={e => { if (!isActive) e.currentTarget.style.background = 'var(--bg-hover)' }}
-        onMouseLeave={e => { if (!isActive) e.currentTarget.style.background = 'transparent' }}
-      >
-        <span style={{
-          fontSize: 10,
-          color: 'var(--text-muted)',
-          width: 12,
-          flexShrink: 0,
-          display: 'inline-block',
-          transition: 'transform 0.15s ease',
-          transform: isDir ? (expanded ? 'rotate(90deg)' : 'rotate(0deg)') : 'none',
-          opacity: isDir ? 1 : 0,
-        }}>
-          ›
-        </span>
-        <FileIconDot node={node} isExpanded={expanded} />
-        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{node.name}</span>
-      </div>
-      {isDir && expanded && node.children?.map(child => (
-        <FileTreeNode
-          key={child.path}
-          node={child}
-          depth={depth + 1}
-          activePath={activePath}
-          onSelect={onSelect}
-        />
-      ))}
-    </>
-  )
-}
-
-const FILE_TYPE_MAP: Record<string, string> = {
-  js: '#f7df1e', jsx: '#61dafb', ts: '#3178c6', tsx: '#3178c6',
-  json: '#8bc34a', md: '#7b8cde', yaml: '#f97316', yml: '#f97316',
-  py: '#3572a5', go: '#00acd7', sql: '#e38c00', env: '#6a9955',
-  sh: '#89d185', toml: '#9c4221',
-}
-
-function FileIconDot({ node, isExpanded }: { node: FileNode; isExpanded?: boolean }) {
-  if (node.type === 'directory') {
-    return (
-      <span style={{ width: 14, flexShrink: 0, fontSize: 12 }}>
-        {isExpanded ? '▿' : '▹'}
+    <div
+      onClick={() => {
+        if (!isLocked && file.type === 'file') onSelect(file)
+      }}
+      title={isLocked ? 'Start the challenge to access files' : file.path}
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+        padding: `4px 12px 4px ${indent}px`,
+        cursor: isLocked ? 'not-allowed' : file.type === 'file' ? 'pointer' : 'default',
+        background: isSelected && !isLocked ? 'var(--bg-active)' : 'transparent',
+        opacity: isLocked ? 0.45 : 1,
+        transition: 'background 0.1s, opacity 0.15s',
+        userSelect: 'none',
+      }}
+      onMouseEnter={e => {
+        if (!isLocked && file.type === 'file') {
+          e.currentTarget.style.background = isSelected
+            ? 'var(--bg-active)'
+            : 'var(--bg-elevated)'
+        }
+      }}
+      onMouseLeave={e => {
+        e.currentTarget.style.background = isSelected && !isLocked
+          ? 'var(--bg-active)'
+          : 'transparent'
+      }}
+    >
+      <span style={{
+        fontSize: 12,
+        color: file.type === 'directory' ? '#fbbf24' : 'var(--text-muted)',
+        fontFamily: 'var(--font-mono)',
+        lineHeight: 1,
+        flexShrink: 0,
+      }}>
+        {getIcon(file)}
       </span>
-    )
-  }
-  const ext = node.name.split('.').pop() ?? ''
-  const color = FILE_TYPE_MAP[ext] ?? 'var(--text-muted)'
-  return (
-    <span style={{
-      width: 8, height: 8, borderRadius: 2,
-      background: color, flexShrink: 0, display: 'inline-block', marginRight: 2,
-    }} />
+      <span style={{
+        fontSize: 12,
+        color: isSelected && !isLocked ? 'var(--text-primary)' : 'var(--text-secondary)',
+        fontFamily: 'var(--font-mono)',
+        whiteSpace: 'nowrap',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+      }}>
+        {file.name}
+      </span>
+    </div>
   )
 }

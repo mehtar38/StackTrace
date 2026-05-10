@@ -1,91 +1,128 @@
 'use client'
 
-import { useState, useCallback, useEffect, useRef } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import dynamic from 'next/dynamic'
-import type { Challenge, FileContent, FileNode, AIMessage } from '@/lib/types'
-import { DIFFICULTY_META } from '@/lib/constants'
-import { HintsPanel } from '@/components/challenge/HintsPanel'
-import { ProblemPanel } from '@/components/challenge/ProblemPanel'
-import { AIPanel } from '@/components/challenge/aiPanel'
-import { FileExplorer } from '@/components/challenge/FileExplorer'
-import { ResizableLayout, ResizableEditor } from './ResizeableLayout'
-import Link from 'next/link'
+import Editor from '@monaco-editor/react'
+import { useRouter } from 'next/navigation'
+import { ResizableLayout } from './ResizeableLayout'
+import { FileExplorer } from './FileExplorer'
+import { ProblemPanel } from './ProblemPanel'
+import { HintsPanel } from './HintsPanel'
+import { AIPanel } from './aiPanel'
+import { StartChallengeOverlay } from './StartChallengeOverlay'
+import { useSession } from '@/hooks/UseSession'
+import type { Challenge, FileNode, AIMessage } from '@/lib/types'
 
-const MonacoEditor = dynamic(() => import('@monaco-editor/react'), {
-  ssr: false,
-  loading: () => <div style={{ flex: 1, background: '#1e1e1e' }} />,
-})
-
-type LeftPanel = 'problem' | 'hints' | 'ai'
+const TerminalPanel = dynamic(
+  () => import('./TerminalPanel'),
+  { ssr: false, loading: () => <TerminalPlaceholder /> }
+)
 
 interface ChallengeIDEProps {
   challenge: Challenge
   fileTree: FileNode[]
-  fileContents: FileContent[]
 }
 
-export function ChallengeIDE({ challenge, fileTree, fileContents }: ChallengeIDEProps) {
-  const [leftPanel, setLeftPanel] = useState<LeftPanel>('problem')
-  const [activePath, setActivePath] = useState<string>(fileTree[0]?.path ?? '')
-  const [editedContents, setEditedContents] = useState<Record<string, string>>(
-    Object.fromEntries(fileContents.map(f => [f.path, f.content]))
+type LeftTab = 'problem' | 'hints' | 'ai'
+
+export function ChallengeIDE({ challenge, fileTree }: ChallengeIDEProps) {
+  const router = useRouter()
+
+  // ── UI state ───────────────────────────────────────────────────────────────
+  const [leftTab, setLeftTab] = useState<LeftTab>('problem')
+  const [selectedFile, setSelectedFile] = useState<FileNode | null>(
+    fileTree.find(f => f.type === 'file') ?? null
   )
-  const [revealedHints, setRevealedHints] = useState<number[]>([])
-  const [aiMessages, setAiMessages] = useState<AIMessage[]>([initialAIMessage()])
+  const [isTerminalOpen, setIsTerminalOpen] = useState(false)
+  const [isExiting, setIsExiting] = useState(false)
+
+  // ── File contents (fetched from orchestrator after session starts) ─────────
+  const [fileContents, setFileContents] = useState<Map<string, string>>(new Map())
+  const [loadingFiles, setLoadingFiles] = useState(false)
+
+  // ── Hints state (HintsPanel is fully controlled) ───────────────────────────
+  const [revealedIndices, setRevealedIndices] = useState<number[]>([])
+  const handleReveal = useCallback((index: number) => {
+    setRevealedIndices(prev => prev.includes(index) ? prev : [...prev, index])
+  }, [])
+
+  // ── AI state (AIPanel is fully controlled) ─────────────────────────────────
+  const [aiMessages, setAiMessages] = useState<AIMessage[]>([])
   const [aiInput, setAiInput] = useState('')
   const [aiLoading, setAiLoading] = useState(false)
-  const [isFullscreen, setIsFullscreen] = useState(false)
-  const [terminalOpen, setTerminalOpen] = useState(true)
-  const [elapsed, setElapsed] = useState(0)
-
-  useEffect(() => {
-    const timer = setInterval(() => setElapsed(e => e + 1), 1000)
-    return () => clearInterval(timer)
-  }, [])
-
-  const activeFile = fileContents.find(f => f.path === activePath)
-  const diff = DIFFICULTY_META[challenge.difficulty]
-
-  const handleFileChange = useCallback((value: string | undefined) => {
-    if (!activePath || value === undefined) return
-    setEditedContents(prev => ({ ...prev, [activePath]: value }))
-  }, [activePath])
-
-  const handleRevealHint = useCallback((index: number) => {
-    setRevealedHints(prev => (prev.includes(index) ? prev : [...prev, index]))
-  }, [])
 
   const handleAISend = useCallback(async () => {
-    const content = aiInput.trim()
-    if (!content || aiLoading) return
-    const userMessage: AIMessage = {
-      id: crypto.randomUUID(), role: 'user', content, timestamp: new Date().toISOString(),
-    }
+    const text = aiInput.trim()
+    if (!text || aiLoading) return
+    const userMsg: AIMessage = { id: crypto.randomUUID(), role: 'user', content: text }
+    setAiMessages(prev => [...prev, userMsg])
     setAiInput('')
-    setAiMessages(prev => [...prev, userMessage])
     setAiLoading(true)
-    await new Promise(resolve => setTimeout(resolve, 800))
-    const assistantMessage: AIMessage = {
-      id: crypto.randomUUID(), role: 'assistant', content: "That's a good question...", timestamp: new Date().toISOString(),
+    // TODO: replace with real Groq API call via AI service
+    await new Promise(r => setTimeout(r, 800))
+    const assistantMsg: AIMessage = {
+      id: crypto.randomUUID(),
+      role: 'assistant',
+      content: "Think about what happens to that data between requests — what's the lifecycle of the values you're working with?",
     }
-    setAiMessages(prev => [...prev, assistantMessage])
+    setAiMessages(prev => [...prev, assistantMsg])
     setAiLoading(false)
   }, [aiInput, aiLoading])
 
-  if (isFullscreen) {
-    return (
-      <FullscreenEditor
-        fileTree={fileTree}
-        activePath={activePath}
-        content={editedContents[activePath] ?? ''}
-        language={activeFile?.language ?? 'plaintext'}
-        readonly={activeFile?.readonly ?? false}
-        onFileSelect={setActivePath}
-        onChange={handleFileChange}
-        onExit={() => setIsFullscreen(false)}
-      />
-    )
-  }
+  // ── Session ────────────────────────────────────────────────────────────────
+  const { session, status, error, startChallenge, exitChallenge, writeFile, readFile } =
+    useSession(challenge.id)
+
+  // ── Load file contents once session becomes active ─────────────────────────
+  // setState is called inside the async callback, not synchronously in the
+  // effect body, which avoids cascading render warnings.
+  useEffect(() => {
+    if (status !== 'active' || !session) return
+    let cancelled = false
+
+    async function loadFiles() {
+      setLoadingFiles(true)
+      const paths = fileTree.filter(f => f.type === 'file').map(f => f.path)
+      const entries = await Promise.all(
+        paths.map(async (path): Promise<[string, string]> => {
+          try { return [path, await readFile(path)] }
+          catch { return [path, ''] }
+        })
+      )
+      if (!cancelled) {
+        setFileContents(new Map(entries))
+        setLoadingFiles(false)
+      }
+    }
+
+    loadFiles()
+    return () => { cancelled = true }
+  }, [status, session]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Monaco onChange ────────────────────────────────────────────────────────
+  const handleEditorChange = useCallback((value: string | undefined) => {
+    if (!selectedFile || value === undefined || status !== 'active') return
+    setFileContents(prev => new Map(prev).set(selectedFile.path, value))
+    writeFile(selectedFile.path, value)
+  }, [selectedFile, status, writeFile])
+
+  const handleFileSelect = useCallback((file: FileNode) => setSelectedFile(file), [])
+
+  // ── Save & Exit ────────────────────────────────────────────────────────────
+  const handleExit = useCallback(async () => {
+    if (isExiting) return
+    setIsExiting(true)
+    try {
+      await exitChallenge()
+      router.push('/')
+    } catch {
+      setIsExiting(false)
+    }
+  }, [exitChallenge, router, isExiting])
+
+  const isLocked = status !== 'active'
+  const currentContent = selectedFile ? (fileContents.get(selectedFile.path) ?? '') : ''
+  const currentLanguage = selectedFile?.language ?? 'plaintext'
 
   return (
     <div style={{
@@ -94,230 +131,285 @@ export function ChallengeIDE({ challenge, fileTree, fileContents }: ChallengeIDE
       flexDirection: 'column',
       background: 'var(--bg-base)',
       overflow: 'hidden',
-      position: 'relative'
     }}>
-      <TopBar
-        title={challenge.title}
-        category={challenge.category}
-        diffLabel={diff.label}
-        diffColor={diff.color}
-        elapsed={elapsed}
-        estimatedMins={challenge.estimatedMins}
+      <IDEHeader
+        challengeTitle={challenge.title}
+        status={status}
+        isExiting={isExiting}
+        onExit={handleExit}
       />
 
-      {/* 🔑 Middle area: explicit flex-1, min-h-0, overflow-hidden */}
-      <div style={{ flex: 1, minHeight: 0, display: 'flex', overflow: 'hidden' }}>
-<ResizableLayout
-  left={
-    <div style={{ height: '100vh', overflow: 'hidden' }}>
-      <LeftPanel
-        panel={leftPanel}
-        onPanelChange={setLeftPanel}
-        challenge={challenge}
-        revealedHints={revealedHints}
-        onRevealHint={handleRevealHint}
-        aiMessages={aiMessages}
-        aiInput={aiInput}
-        aiLoading={aiLoading}
-        onAIInput={setAiInput}
-        onAISend={handleAISend}
-        totalHints={challenge.hints.length}
-      />
-    </div>
-  }
-  right={
-    <div style={{ height: '100vh', overflow: 'hidden' }}>
-      <ResizableEditor
-        explorer={
-          <div style={{ height: '100%' }}>
-            <FileExplorer tree={fileTree} activePath={activePath} onFileSelect={setActivePath} />
-          </div>
-        }
-        editor={
-          <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-            <EditorArea
-              activePath={activePath}
-              content={editedContents[activePath] ?? ''}
-              language={activeFile?.language ?? 'plaintext'}
-              readonly={activeFile?.readonly ?? false}
-              onFullscreen={() => setIsFullscreen(true)}
-              onChange={handleFileChange}
+      <div style={{ flex: 1, overflow: 'hidden' }}>
+        <ResizableLayout
+          left={
+            <LeftPanel
+              challenge={challenge}
+              activeTab={leftTab}
+              onTabChange={setLeftTab}
+              revealedIndices={revealedIndices}
+              onReveal={handleReveal}
+              aiMessages={aiMessages}
+              aiInput={aiInput}
+              onAIInput={setAiInput}
+              onAISend={handleAISend}
+              aiLoading={aiLoading}
             />
-            <TerminalStrip open={terminalOpen} onToggle={() => setTerminalOpen(o => !o)} />
-          </div>
-        }
+          }
+          right={
+            <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+              <FileExplorer
+                files={fileTree}
+                selectedPath={selectedFile?.path ?? null}
+                onSelect={handleFileSelect}
+                isLocked={isLocked}
               />
-    </div>
-  }
+
+              <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
+                {isLocked && (
+                  <StartChallengeOverlay
+                    status={status === 'idle' || status === 'prewarming' || status === 'error'
+                      ? status : 'idle'}
+                    error={error}
+                    onStart={startChallenge}
+                  />
+                )}
+                <div style={{
+                  height: '100%',
+                  pointerEvents: isLocked ? 'none' : 'auto',
+                  opacity: isLocked ? 0.35 : 1,
+                  transition: 'opacity 0.2s ease',
+                }}>
+                  {loadingFiles ? <EditorLoadingState /> : (
+                    <Editor
+                      height="100%"
+                      language={currentLanguage}
+                      value={isLocked ? '' : currentContent}
+                      theme="vs-dark"
+                      onChange={handleEditorChange}
+                      options={{
+                        fontSize: 13,
+                        fontFamily: '"Geist Mono", "Fira Code", monospace',
+                        minimap: { enabled: false },
+                        scrollBeyondLastLine: false,
+                        lineNumbers: 'on',
+                        readOnly: isLocked,
+                        wordWrap: 'on',
+                        padding: { top: 12 },
+                        renderLineHighlight: 'line',
+                        cursorBlinking: 'smooth',
+                      }}
+                    />
+                  )}
+                </div>
+              </div>
+
+              <TerminalStrip
+                sessionId={session?.sessionId ?? null}
+                isOpen={isTerminalOpen}
+                isActive={status === 'active'}
+                onToggle={() => setIsTerminalOpen(v => !v)}
+              />
+            </div>
+          }
         />
       </div>
-
-      <StatusBar runtime={challenge.environment.runtime} port={challenge.environment.port} />
     </div>
   )
 }
 
-// ─── Sub-components ────────────────────────────────────────────────────────────
+// ── Sub-components ─────────────────────────────────────────────────────────────
 
-function TopBar({ title, category, diffLabel, diffColor, elapsed, estimatedMins }: {
-  title: string; category: string; diffLabel: string; diffColor: string; elapsed: number; estimatedMins: number
+function IDEHeader({ challengeTitle, status, isExiting, onExit }: {
+  challengeTitle: string
+  status: string
+  isExiting: boolean
+  onExit: () => void
 }) {
-  const minutes = Math.floor(elapsed / 60).toString().padStart(2, '0')
-  const seconds = (elapsed % 60).toString().padStart(2, '0')
   return (
-    <header style={{ height: 48, background: 'var(--bg-surface)', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', padding: '0 16px', gap: 12, flexShrink: 0 }}>
-      <Link href="/" style={{ textDecoration: 'none', color: 'inherit' }}>stack<span style={{ color: 'var(--accent)' }}>trace</span></Link>
-      <span style={{ color: 'var(--border-strong)', fontSize: 16, userSelect: 'none' }}>/</span>
-      <span style={{ color: 'var(--text-primary)', fontSize: 13 }}>{title}</span>
-      <span style={{ color: diffColor, fontSize: 12 }}>{diffLabel}</span>
-      <span style={{ background: 'var(--bg-active)', border: '1px solid var(--border)', color: 'var(--text-secondary)', padding: '2px 8px', borderRadius: 'var(--radius-sm)', fontSize: 11, fontFamily: 'var(--font-mono)' }}>{category}</span>
-      <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 16 }}>
-        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 13, color: 'var(--text-secondary)' }}>{minutes}:{seconds}<span style={{ color: 'var(--text-muted)' }}> / {estimatedMins}m</span></span>
-        <button style={{ background: 'var(--accent-muted)', border: '1px solid var(--accent-border)', color: 'var(--accent)', padding: '6px 16px', borderRadius: 'var(--radius-md)', cursor: 'pointer', fontSize: 13 }}>Submit fix</button>
+    <div style={{
+      height: 44,
+      borderBottom: '1px solid var(--border)',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      padding: '0 16px',
+      background: 'var(--bg-surface)',
+      flexShrink: 0,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 13, color: 'var(--text-primary)', letterSpacing: '-0.02em' }}>
+          stack<span style={{ color: 'var(--accent)' }}>trace</span>
+        </span>
+        <span style={{ color: 'var(--border)', fontSize: 12 }}>╱</span>
+        <span style={{ color: 'var(--text-secondary)', fontSize: 13, fontFamily: 'var(--font-sans)' }}>
+          {challengeTitle}
+        </span>
       </div>
-    </header>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <SessionBadge status={status} />
+        {status === 'active' && (
+          <button
+            onClick={onExit}
+            disabled={isExiting}
+            style={{
+              background: 'transparent',
+              border: '1px solid var(--border-strong)',
+              color: isExiting ? 'var(--text-muted)' : 'var(--text-secondary)',
+              padding: '4px 12px',
+              borderRadius: 'var(--radius-md)',
+              cursor: isExiting ? 'not-allowed' : 'pointer',
+              fontSize: 12,
+              fontFamily: 'var(--font-sans)',
+            }}
+          >
+            {isExiting ? 'Saving…' : 'Save & Exit'}
+          </button>
+        )}
+      </div>
+    </div>
   )
 }
 
-function LeftPanel({ panel, onPanelChange, challenge, revealedHints, onRevealHint, aiMessages, aiInput, aiLoading, onAIInput, onAISend, totalHints }: {
-  panel: LeftPanel; onPanelChange: (p: LeftPanel) => void; challenge: Challenge; revealedHints: number[];
-  onRevealHint: (i: number) => void; aiMessages: AIMessage[]; aiInput: string; aiLoading: boolean;
-  onAIInput: (v: string) => void; onAISend: () => void; totalHints: number
+function SessionBadge({ status }: { status: string }) {
+  const config: Record<string, { label: string; color: string }> = {
+    idle:       { label: 'Not started', color: 'var(--text-muted)' },
+    prewarming: { label: 'Starting…',   color: '#fbbf24' },
+    active:     { label: 'Active',      color: '#4ade80' },
+    exited:     { label: 'Exited',      color: 'var(--text-muted)' },
+    expired:    { label: 'Expired',     color: '#f87171' },
+    error:      { label: 'Error',       color: '#f87171' },
+  }
+  const c = config[status] ?? config.idle
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+      <div style={{
+        width: 6, height: 6, borderRadius: '50%', background: c.color,
+        boxShadow: status === 'active' ? `0 0 6px ${c.color}` : 'none',
+      }} />
+      <span style={{ color: c.color, fontSize: 11, fontFamily: 'var(--font-mono)' }}>{c.label}</span>
+    </div>
+  )
+}
+
+function LeftPanel({
+  challenge, activeTab, onTabChange,
+  revealedIndices, onReveal,
+  aiMessages, aiInput, onAIInput, onAISend, aiLoading,
+}: {
+  challenge: Challenge
+  activeTab: LeftTab
+  onTabChange: (t: LeftTab) => void
+  revealedIndices: number[]
+  onReveal: (index: number) => void
+  aiMessages: AIMessage[]
+  aiInput: string
+  onAIInput: (v: string) => void
+  onAISend: () => void
+  aiLoading: boolean
 }) {
   return (
-    <aside style={{ height: '100%', display: 'flex', flexDirection: 'column', borderRight: '1px solid var(--border)', background: 'var(--bg-surface)' }}>
-      <nav style={{ display: 'flex', borderBottom: '1px solid var(--border)', background: 'var(--bg-surface)', flexShrink: 0 }}>
-        {['problem', 'hints', 'ai'].map(id => (
-          <button key={id} onClick={() => onPanelChange(id as LeftPanel)} style={{
-            flex: 1, padding: '10px 0', fontSize: 12, cursor: 'pointer', border: 'none', background: 'transparent',
-            color: panel === id ? 'var(--text-primary)' : 'var(--text-muted)',
-            borderBottom: panel === id ? '1px solid var(--accent)' : '1px solid transparent'
-          }}>
-            {id.charAt(0).toUpperCase() + id.slice(1)} {id === 'hints' && `(${revealedHints.length}/${totalHints})`}
+    <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+      <div style={{ display: 'flex', borderBottom: '1px solid var(--border)', background: 'var(--bg-surface)', flexShrink: 0 }}>
+        {(['problem', 'hints', 'ai'] as LeftTab[]).map(tab => (
+          <button
+            key={tab}
+            onClick={() => onTabChange(tab)}
+            style={{
+              padding: '10px 16px',
+              background: 'transparent',
+              border: 'none',
+              borderBottom: activeTab === tab ? '1px solid var(--accent)' : '1px solid transparent',
+              color: activeTab === tab ? 'var(--text-primary)' : 'var(--text-muted)',
+              cursor: 'pointer',
+              fontSize: 12,
+              fontFamily: 'var(--font-sans)',
+              textTransform: 'capitalize',
+              marginBottom: -1,
+              transition: 'color 0.15s',
+            }}
+          >
+            {tab === 'ai' ? 'AI Assistant' : tab.charAt(0).toUpperCase() + tab.slice(1)}
           </button>
         ))}
-      </nav>
-      <div style={{ flex: 1, overflowY: 'auto', padding: 20 }}>
-        {panel === 'problem' && <ProblemPanel challenge={challenge} />}
-        {panel === 'hints' && <HintsPanel hints={challenge.hints} revealedIndices={revealedHints} onReveal={onRevealHint} />}
-        {panel === 'ai' && <AIPanel messages={aiMessages} input={aiInput} onInput={onAIInput} onSend={onAISend} isLoading={aiLoading} />}
       </div>
-    </aside>
-  )
-}
-
-// 🔑 Monaco wrapper with bulletproof layout sync
-function EditorArea({ activePath, content, language, readonly, onFullscreen, onChange }: {
-  activePath: string; content: string; language: string; readonly: boolean; onFullscreen: () => void; onChange: (v?: string) => void
-}) {
-  const containerRef = useRef<HTMLDivElement>(null)
-  const editorRef = useRef<any>(null)
-
-  // Force layout on mount & resize
-  useEffect(() => {
-    const el = containerRef.current
-    if (!el || !editorRef.current) return
-
-    const observer = new ResizeObserver(() => {
-      editorRef.current.layout()
-    })
-    observer.observe(el)
-    return () => observer.disconnect()
-  }, [activePath])
-
-  return (
-    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-      <EditorToolbar activePath={activePath} readonly={readonly} onFullscreen={onFullscreen} />
-      {/* 🔑 Monaco container: explicit relative, overflow-hidden, flex-1, min-h-0 */}
-      <div ref={containerRef} style={{ flex: 1, position: 'relative', minHeight: 0, minWidth: 0, overflow: 'hidden' }}>
-        <MonacoEditor
-          height="100%"
-          width="100%"
-          language={language}
-          value={content}
-          onChange={onChange}
-          theme="vs-dark"
-          onMount={(editor) => {
-            editorRef.current = editor
-            // Microtask ensures DOM is painted before layout
-            queueMicrotask(() => editor.layout())
-          }}
-          options={{
-            automaticLayout: true,
-            fontSize: 13,
-            fontFamily: "'Geist Mono', 'Fira Code', monospace",
-            fontLigatures: true,
-            minimap: { enabled: false },
-            scrollBeyondLastLine: false,
-            lineNumbers: 'on',
-            renderLineHighlight: 'line',
-            padding: { top: 16 },
-            tabSize: 2,
-            readOnly: readonly,
-          }}
-        />
+      <div style={{ flex: 1, overflow: 'auto', padding: 16 }}>
+        {activeTab === 'problem' && <ProblemPanel challenge={challenge} />}
+        {activeTab === 'hints' && (
+          <HintsPanel
+            hints={challenge.hints}
+            revealedIndices={revealedIndices}
+            onReveal={onReveal}
+          />
+        )}
+        {activeTab === 'ai' && (
+          <AIPanel
+            messages={aiMessages}
+            input={aiInput}
+            onInput={onAIInput}
+            onSend={onAISend}
+            isLoading={aiLoading}
+          />
+        )}
       </div>
     </div>
   )
 }
 
-function EditorToolbar({ activePath, readonly, onFullscreen }: {
-  activePath: string; readonly: boolean; onFullscreen: () => void
-}) {
-  const fileName = activePath.split('/').pop() ?? ''
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', padding: '6px 12px', gap: 8, borderBottom: '1px solid var(--border)', background: 'var(--bg-surface)', flexShrink: 0 }}>
-      <span style={{ fontSize: 12, fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)' }}>{fileName}</span>
-      {readonly && <span style={{ fontSize: 10, color: 'var(--text-muted)', background: 'var(--bg-active)', border: '1px solid var(--border)', padding: '1px 6px', borderRadius: 'var(--radius-sm)' }}>readonly</span>}
-      <button onClick={onFullscreen} style={{ marginLeft: 'auto', background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-muted)', padding: '3px 10px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', fontSize: 11 }}>⛶ fullscreen</button>
-    </div>
-  )
-}
-
-function FullscreenEditor({ fileTree, activePath, content, language, readonly, onFileSelect, onChange, onExit }: {
-  fileTree: FileNode[]; activePath: string; content: string; language: string; readonly: boolean;
-  onFileSelect: (path: string) => void; onChange: (v?: string) => void; onExit: () => void
+function TerminalStrip({ sessionId, isOpen, isActive, onToggle }: {
+  sessionId: string | null
+  isOpen: boolean
+  isActive: boolean
+  onToggle: () => void
 }) {
   return (
-    <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--bg-base)' }}>
-      <div style={{ height: 34, background: 'var(--bg-surface)', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', padding: '0 12px', gap: 8, flexShrink: 0 }}>
-        <button onClick={onExit} style={{ background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-muted)', padding: '3px 10px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', fontSize: 11 }}>⊠ exit fullscreen</button>
+    <div style={{ borderTop: '1px solid var(--border)', background: 'var(--bg-surface)', flexShrink: 0 }}>
+      <div
+        onClick={isActive ? onToggle : undefined}
+        style={{
+          height: 32, display: 'flex', alignItems: 'center',
+          padding: '0 12px', gap: 8,
+          cursor: isActive ? 'pointer' : 'default', userSelect: 'none',
+        }}
+      >
+        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: isActive ? 'var(--text-secondary)' : 'var(--text-muted)' }}>
+          {isOpen ? '▾' : '▸'} terminal
+        </span>
+        {!isActive && (
+          <span style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: 'var(--font-sans)' }}>
+            — start challenge to enable
+          </span>
+        )}
       </div>
-      <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
-        <FileExplorer tree={fileTree} activePath={activePath} onFileSelect={onFileSelect} />
-        <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
-          <MonacoEditor height="100%" language={language} value={content} onChange={onChange} theme="vs-dark" options={{ automaticLayout: true, fontSize: 13, minimap: { enabled: false }, readOnly: readonly }} />
+      {isOpen && isActive && sessionId && (
+        <div style={{ height: 240 }}>
+          <TerminalPanel sessionId={sessionId} isVisible={isOpen} />
         </div>
-      </div>
+      )}
     </div>
   )
 }
 
-function TerminalStrip({ open, onToggle }: { open: boolean; onToggle: () => void }) {
+function EditorLoadingState() {
   return (
-    <div style={{ borderTop: '1px solid var(--border)', background: 'var(--bg-surface)', height: open ? 180 : 32, transition: 'height 0.2s ease', display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
-      <button onClick={onToggle} style={{ height: 32, display: 'flex', alignItems: 'center', padding: '0 12px', gap: 8, cursor: 'pointer', background: 'transparent', border: 'none', borderBottom: open ? '1px solid var(--border)' : 'none', width: '100%', textAlign: 'left' }}>
-        <span style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>terminal</span>
-        <span style={{ fontSize: 10, color: 'var(--text-muted)', marginLeft: 'auto' }}>{open ? '▾' : '▸'}</span>
-      </button>
-      {open && <div style={{ flex: 1, padding: '8px 12px', fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-secondary)', overflowY: 'auto', lineHeight: 1.6 }}>
-        <span style={{ color: 'var(--success)' }}>$</span>
-        <span style={{ color: 'var(--text-muted)' }}> Terminal connects when your session starts...</span>
-      </div>}
+    <div style={{
+      height: '100%', display: 'flex', alignItems: 'center',
+      justifyContent: 'center', color: 'var(--text-muted)',
+      fontSize: 13, fontFamily: 'var(--font-mono)',
+    }}>
+      <span style={{ animation: 'pulse 1.5s ease-in-out infinite' }}>loading files…</span>
+      <style>{`@keyframes pulse { 0%,100%{opacity:0.4} 50%{opacity:1} }`}</style>
     </div>
   )
 }
 
-function StatusBar({ runtime, port }: { runtime: string; port: number }) {
+function TerminalPlaceholder() {
   return (
-    <div style={{ height: 24, background: 'var(--accent-dim)', display: 'flex', alignItems: 'center', padding: '0 12px', gap: 16, flexShrink: 0 }}>
-      {[runtime, `Port ${port}`, 'Session active'].map(item => (
-        <span key={item} style={{ fontSize: 11, color: 'rgba(255,255,255,0.7)', fontFamily: 'var(--font-mono)' }}>{item}</span>
-      ))}
+    <div style={{
+      height: 240, background: '#0a0a0b', display: 'flex',
+      alignItems: 'center', justifyContent: 'center',
+      color: 'var(--text-muted)', fontSize: 12, fontFamily: 'var(--font-mono)',
+    }}>
+      loading terminal…
     </div>
   )
-}
-
-function initialAIMessage(): AIMessage {
-  return { id: crypto.randomUUID(), role: 'assistant', content: "I'm here to help you think through this...", timestamp: new Date().toISOString() }
 }

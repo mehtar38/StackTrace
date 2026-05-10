@@ -1,13 +1,13 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"strings"
-
-	"stacktrace/orchestrator/internal/middleware"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
@@ -16,8 +16,6 @@ import (
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  4096,
 	WriteBufferSize: 4096,
-	// CheckOrigin validates against the same allowed origins used by the CORS middleware.
-	// The allowedOrigins list is read from ALLOWED_ORIGINS env var.
 	CheckOrigin: func(r *http.Request) bool {
 		origin := r.Header.Get("Origin")
 		allowed := getAllowedOrigins()
@@ -25,14 +23,6 @@ var upgrader = websocket.Upgrader{
 	},
 }
 
-// terminalMessage is the JSON envelope for messages between the browser and orchestrator.
-// The browser sends: { "type": "input", "data": "<base64 or raw string>" }
-//
-//	{ "type": "resize", "cols": 220, "rows": 50 }
-//
-// The orchestrator sends: { "type": "output", "data": "<raw string>" }
-//
-//	{ "type": "error",  "data": "<message>" }
 type terminalMessage struct {
 	Type string `json:"type"`
 	Data string `json:"data,omitempty"`
@@ -40,20 +30,29 @@ type terminalMessage struct {
 	Rows uint16 `json:"rows,omitempty"`
 }
 
-// terminal godoc
-// GET /sessions/:id/terminal  (WebSocket upgrade)
+// terminal handles WebSocket upgrades for the container PTY.
 //
-// Auth: Clerk JWT is validated before the WebSocket upgrade via the RequireAuth
-// middleware applied on the route group. The upgrade only proceeds if auth passes.
-//
-// Flow:
-//  1. Upgrade the HTTP connection to WebSocket.
-//  2. Open a PTY exec session inside the container.
-//  3. Pump: container stdout → WS, WS input → container stdin.
-//  4. On WS close or error, close the PTY and release resources.
+// Auth note: the browser WebSocket API cannot send custom HTTP headers during
+// the upgrade. We use Sec-WebSocket-Protocol as a token carrier instead.
+// The frontend sends: Sec-WebSocket-Protocol: bearer.<clerk_jwt>
+// This handler extracts it, validates it, then upgrades. The route does NOT
+// use RequireAuth middleware — auth happens here before the upgrade.
 func (h *handlers) terminal(c *gin.Context) {
-	claims := middleware.GetClaims(c)
 	sessionID := c.Param("id")
+
+	// Extract token from subprotocol header
+	token, err := extractWSToken(c.Request)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Validate Clerk JWT
+	claims, err := h.verifier.Verify(c.Request.Context(), token)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid or expired token"})
+		return
+	}
 
 	// Verify session ownership before upgrading
 	state, err := h.sessions.GetState(c.Request.Context(), sessionID)
@@ -66,8 +65,11 @@ func (h *handlers) terminal(c *gin.Context) {
 		return
 	}
 
-	// Upgrade the HTTP connection to WebSocket
-	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
+	// Echo subprotocol back so the browser completes the handshake
+	responseHeader := http.Header{}
+	responseHeader.Set("Sec-WebSocket-Protocol", "bearer.ok")
+
+	conn, err := upgrader.Upgrade(c.Writer, c.Request, responseHeader)
 	if err != nil {
 		slog.Error("websocket upgrade failed", "session_id", sessionID, "error", err)
 		return
@@ -76,7 +78,6 @@ func (h *handlers) terminal(c *gin.Context) {
 
 	slog.Info("terminal connected", "session_id", sessionID, "user", claims.Sub)
 
-	// Open a PTY shell inside the container
 	shell, err := h.sessions.OpenShell(c.Request.Context(), sessionID)
 	if err != nil {
 		sendWSError(conn, "failed to open shell: "+err.Error())
@@ -84,7 +85,7 @@ func (h *handlers) terminal(c *gin.Context) {
 	}
 	defer shell.Close()
 
-	// container → WS pump (runs in a goroutine)
+	// Container → browser pump
 	wsWriteErr := make(chan error, 1)
 	go func() {
 		buf := make([]byte, 4096)
@@ -108,7 +109,7 @@ func (h *handlers) terminal(c *gin.Context) {
 		}
 	}()
 
-	// WS → container pump (main goroutine)
+	// Browser → container pump
 	for {
 		select {
 		case err := <-wsWriteErr:
@@ -129,9 +130,8 @@ func (h *handlers) terminal(c *gin.Context) {
 
 		var msg terminalMessage
 		if err := json.Unmarshal(rawMsg, &msg); err != nil {
-			// Treat unparseable messages as raw input (some xterm.js setups send raw bytes)
 			_, _ = shell.Write(rawMsg)
-			h.sessions.TouchActivity(c.Request.Context(), sessionID)
+			h.sessions.TouchActivity(context.Background(), sessionID)
 			continue
 		}
 
@@ -141,19 +141,33 @@ func (h *handlers) terminal(c *gin.Context) {
 				slog.Warn("shell write error", "session_id", sessionID, "error", err)
 				return
 			}
-			h.sessions.TouchActivity(c.Request.Context(), sessionID)
-
+			h.sessions.TouchActivity(context.Background(), sessionID)
 		case "resize":
 			if msg.Rows > 0 && msg.Cols > 0 {
 				if err := shell.Resize(msg.Rows, msg.Cols); err != nil {
 					slog.Warn("shell resize error", "session_id", sessionID, "error", err)
 				}
 			}
-
 		default:
 			slog.Debug("unknown terminal message type", "type", msg.Type)
 		}
 	}
+}
+
+// extractWSToken pulls the Clerk JWT from Sec-WebSocket-Protocol.
+// The browser sends: "bearer.<token>" — we strip the prefix and return the JWT.
+func extractWSToken(r *http.Request) (string, error) {
+	protocols := websocket.Subprotocols(r)
+	for _, p := range protocols {
+		if strings.HasPrefix(p, "bearer.") {
+			token := strings.TrimPrefix(p, "bearer.")
+			if token == "" {
+				return "", fmt.Errorf("empty bearer token in subprotocol")
+			}
+			return token, nil
+		}
+	}
+	return "", fmt.Errorf("no bearer token in Sec-WebSocket-Protocol header")
 }
 
 func writeWSJSON(conn *websocket.Conn, v interface{}) error {

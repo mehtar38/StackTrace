@@ -1,6 +1,12 @@
-import { notFound } from 'next/navigation'
+// app/challenge/[id]/page.tsx
+// Server component. Loads challenge metadata and file tree only.
+// No file CONTENTS loaded here — that happens client-side after session starts.
+// No localStorage access here — that lives in useSession (client-side).
+
+import { notFound, redirect } from 'next/navigation'
+import { auth } from '@clerk/nextjs/server'
 import { ChallengeIDE } from '@/components/challenge/ChallengeIDE'
-import { getChallengeById, getChallengeFileTree, getFileContent } from '@/lib/api/challenges'
+import { getChallengeById, getChallengeFileTree } from '@/lib/api/challenges'
 
 interface ChallengePageProps {
   params: Promise<{ id: string }>
@@ -8,42 +14,27 @@ interface ChallengePageProps {
 
 export default async function ChallengePage({ params }: ChallengePageProps) {
   const { id } = await params
-  // console.log('PAGE HIT - id:', id)
+
+  // Require auth — redirect to sign-in if not authenticated
+  const { userId } = await auth()
+  if (!userId) {
+    redirect(`/sign-in?redirect_url=/challenge/${id}`)
+  }
 
   const [challengeRes, fileTreeRes] = await Promise.all([
     getChallengeById(id),
     getChallengeFileTree(id),
   ])
 
-  //  console.log('challengeRes:', JSON.stringify(challengeRes))
-  // console.log('fileTreeRes:', JSON.stringify(fileTreeRes))
-
-    if (challengeRes.error || !challengeRes.data) {
-    // console.log('NOTFOUND: challenge error', challengeRes.error)
-    notFound()
-  }
-
   if (challengeRes.error || !challengeRes.data) notFound()
   if (fileTreeRes.error || !fileTreeRes.data) notFound()
 
-  const challenge = challengeRes.data
-  const fileTree = fileTreeRes.data
-
-  const fileContentsRes = await Promise.all(
-    fileTree
-      .filter(f => f.type === 'file')
-      .map(f => getFileContent(id, f.path))
-  )
-
-  const fileContents = fileContentsRes
-    .filter(r => r.data !== null)
-    .map(r => r.data!)
-
+  // File CONTENTS are intentionally not loaded here.
+  // ChallengeIDE will fetch them from the orchestrator after the session starts.
   return (
     <ChallengeIDE
-      challenge={challenge}
-      fileTree={fileTree}
-      fileContents={fileContents}
+      challenge={challengeRes.data}
+      fileTree={fileTreeRes.data}
     />
   )
 }

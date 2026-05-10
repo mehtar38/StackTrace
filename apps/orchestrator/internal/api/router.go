@@ -37,37 +37,26 @@ func NewRouter(deps RouterDeps) http.Handler {
 		supabase: deps.Supabase,
 	}
 
-	// Health check — no auth required, used by container readiness probes
+	// Health check — no auth, used by Docker/ACA readiness probes
 	r.GET("/healthz", h.healthz)
 
-	// Prewarm — no auth required (anon token only).
-	// Called as soon as user lands on the challenge page.
+	// Prewarm — no auth (anon token only)
 	r.POST("/prewarm", h.prewarm)
 
-	// Authenticated session routes
+	// WebSocket terminal — auth handled inside the handler via subprotocol token,
+	// NOT via RequireAuth middleware (browser WS can't send custom headers)
+	r.GET("/sessions/:id/terminal", h.terminal)
+
+	// All other session routes require a valid Clerk JWT in Authorization header
 	auth := r.Group("/sessions")
 	auth.Use(middleware.RequireAuth(deps.ClerkVerifier))
 	{
-		// POST /sessions — promote a pre-warmed container to a real session
 		auth.POST("", h.startSession)
-
-		// GET /sessions/:id — session status + metadata
 		auth.GET("/:id", h.getSession)
-
-		// DELETE /sessions/:id — Save & Exit
 		auth.DELETE("/:id", h.exitSession)
-
-		// POST /sessions/:id/files — write a file into the container (Monaco sync)
 		auth.POST("/:id/files", h.writeFile)
-
-		// GET /sessions/:id/files — read a file from the container
 		auth.GET("/:id/files", h.readFile)
-
-		// GET /sessions/:id/resume — start a new session replaying saved diffs
 		auth.POST("/:id/resume", h.resumeSession)
-
-		// WebSocket terminal — upgrade happens here; auth header validated before upgrade
-		auth.GET("/:id/terminal", h.terminal)
 	}
 
 	return r

@@ -21,7 +21,7 @@ import (
 
 // Claims holds the validated JWT claims from a Clerk session token.
 type Claims struct {
-	// Sub is the Clerk user ID, e.g. "user_2abc..."
+	// Sub is the Clerk user ID
 	Sub string
 	// Email is included if the Clerk JWT template includes it.
 	// Falls back to empty string if not present.
@@ -41,7 +41,7 @@ type JWTVerifier struct {
 const jwksCacheTTL = 1 * time.Hour
 
 // NewJWTVerifier constructs a JWTVerifier.
-// jwksURL: Clerk's JWKS endpoint, e.g. "https://<domain>.clerk.accounts.dev/.well-known/jwks.json"
+// jwksURL: Clerk's JWKS endpoint
 func NewJWTVerifier(jwksURL string) *JWTVerifier {
 	return &JWTVerifier{
 		jwksURL:  jwksURL,

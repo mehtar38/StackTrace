@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/container"
 	dockerclient "github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/stdcopy"
 )
@@ -22,9 +23,8 @@ func (s *dockerShellSession) Write(p []byte) (int, error) {
 	return s.conn.Conn.Write(p)
 }
 
-// Read reads bytes from the container's multiplexed stdout/stderr stream.
-// Docker multiplexes stdout/stderr in TTY=false mode; with TTY=true (which
-// we use), the stream is raw and can be read directly.
+// Read reads bytes from the container's stdout/stderr stream.
+// With TTY=true the stream is raw and can be read directly.
 func (s *dockerShellSession) Read(p []byte) (int, error) {
 	return s.conn.Reader.Read(p)
 }
@@ -39,7 +39,7 @@ func (s *dockerShellSession) ReadDemuxed() (stdout, stderr []byte, err error) {
 
 // Resize resizes the PTY to the given terminal dimensions.
 func (s *dockerShellSession) Resize(rows, cols uint16) error {
-	return s.docker.ContainerExecResize(context.Background(), s.execID, types.ResizeOptions{
+	return s.docker.ContainerExecResize(context.Background(), s.execID, container.ResizeOptions{
 		Height: uint(rows),
 		Width:  uint(cols),
 	})
@@ -48,16 +48,12 @@ func (s *dockerShellSession) Resize(rows, cols uint16) error {
 // Close terminates the exec session and releases all resources.
 func (s *dockerShellSession) Close() error {
 	s.conn.Close()
-	// Exec sessions self-terminate when their process exits; no explicit kill needed.
-	// We close the hijacked connection to release the net.Conn.
 	return nil
 }
 
-// Ensure compile-time interface satisfaction
 var _ ShellSession = (*dockerShellSession)(nil)
 
 // azureShellSession is a placeholder for the ACA implementation.
-// ACA exposes a WebSocket-based exec endpoint; this will proxy through that.
 type azureShellSession struct{}
 
 func (s *azureShellSession) Write(p []byte) (int, error) {
