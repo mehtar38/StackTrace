@@ -1,7 +1,9 @@
 'use client'
 
+// app/page.tsx
 import Link from 'next/link'
 import { useState } from 'react'
+import { SignInButton, SignUpButton, UserButton, useAuth } from '@clerk/nextjs'
 
 const CHALLENGES = [
   {
@@ -54,6 +56,8 @@ export default function HomePage() {
 }
 
 function Nav() {
+  const { isSignedIn } = useAuth()
+
   return (
     <nav style={{
       borderBottom: '1px solid var(--border)',
@@ -79,31 +83,43 @@ function Nav() {
           stack<span style={{ color: 'var(--accent)' }}>trace</span>
         </span>
       </div>
+
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <button style={{
-          background: 'transparent',
-          border: '1px solid var(--border-strong)',
-          color: 'var(--text-secondary)',
-          padding: '6px 14px',
-          borderRadius: 'var(--radius-md)',
-          cursor: 'pointer',
-          fontSize: 13,
-          fontFamily: 'var(--font-sans)',
-        }}>
-          Sign in
-        </button>
-        <button style={{
-          background: 'var(--accent-muted)',
-          border: '1px solid var(--accent-border)',
-          color: 'var(--accent)',
-          padding: '6px 14px',
-          borderRadius: 'var(--radius-md)',
-          cursor: 'pointer',
-          fontSize: 13,
-          fontFamily: 'var(--font-sans)',
-        }}>
-          Sign up
-        </button>
+        {isSignedIn ? (
+          // Clerk's built-in user button (avatar + dropdown with sign out)
+          <UserButton />
+        ) : (
+          <>
+            <SignInButton mode="modal">
+              <button style={{
+                background: 'transparent',
+                border: '1px solid var(--border-strong)',
+                color: 'var(--text-secondary)',
+                padding: '6px 14px',
+                borderRadius: 'var(--radius-md)',
+                cursor: 'pointer',
+                fontSize: 13,
+                fontFamily: 'var(--font-sans)',
+              }}>
+                Sign in
+              </button>
+            </SignInButton>
+            <SignUpButton mode="modal">
+              <button style={{
+                background: 'var(--accent-muted)',
+                border: '1px solid var(--accent-border)',
+                color: 'var(--accent)',
+                padding: '6px 14px',
+                borderRadius: 'var(--radius-md)',
+                cursor: 'pointer',
+                fontSize: 13,
+                fontFamily: 'var(--font-sans)',
+              }}>
+                Sign up
+              </button>
+            </SignUpButton>
+          </>
+        )}
       </div>
     </nav>
   )
@@ -234,11 +250,12 @@ function ChallengeRow({ challenge: c, isLast }: { challenge: typeof CHALLENGES[0
   const diff = DIFFICULTY_META[c.difficulty]
 
   return (
-    <tr style={{
-      borderBottom: isLast ? 'none' : '1px solid var(--border)',
-      transition: 'background 0.1s ease',
-      cursor: 'pointer',
-    }}
+    <tr
+      style={{
+        borderBottom: isLast ? 'none' : '1px solid var(--border)',
+        transition: 'background 0.1s ease',
+        cursor: 'pointer',
+      }}
       onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-elevated)')}
       onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
     >
@@ -246,13 +263,15 @@ function ChallengeRow({ challenge: c, isLast }: { challenge: typeof CHALLENGES[0
         <StatusDot completed={c.completed} attempted={c.attempted} />
       </td>
       <td style={{ padding: '14px 16px' }}>
-        <Link href={`/challenge/${c.id}`} style={{
-          color: 'var(--text-primary)',
-          textDecoration: 'none',
-          fontSize: 14,
-          fontWeight: 400,
-          letterSpacing: '-0.01em',
-        }}
+        <Link
+          href={`/challenge/${c.id}`}
+          style={{
+            color: 'var(--text-primary)',
+            textDecoration: 'none',
+            fontSize: 14,
+            fontWeight: 400,
+            letterSpacing: '-0.01em',
+          }}
           onMouseEnter={e => ((e.target as HTMLElement).style.color = 'var(--accent)')}
           onMouseLeave={e => ((e.target as HTMLElement).style.color = 'var(--text-primary)')}
         >

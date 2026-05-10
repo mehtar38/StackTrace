@@ -74,18 +74,18 @@ export interface ChallengeSummary {
 
 // ─── Session Domain ────────────────────────────────────────────────────────────
 
-export type SessionStatus = 'pending' | 'active' | 'submitted' | 'expired'
-
+export type SessionStatus = 'idle' | 'prewarming' | 'active' | 'exited' | 'expired' | 'error'
 export interface Session {
-  id: string
+  sessionId: string
+  containerHost: string
   challengeId: string
-  userId: string
+  terminalWSURL: string
+}
+
+export interface SessionState {
+  session: Session | null
   status: SessionStatus
-  startedAt: string
-  expiresAt: string
-  hintsUsed: number[]
-  containerEndpoint: string | null
-  websocketUrl: string | null
+  error: string | null
 }
 
 // ─── File System Domain ────────────────────────────────────────────────────────
@@ -124,7 +124,7 @@ export interface AIMessage {
   id: string
   role: MessageRole
   content: string
-  timestamp: string
+  // timestamp: string
 }
 
 export interface AIConversation {

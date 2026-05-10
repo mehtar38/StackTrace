@@ -1,0 +1,54 @@
+version: "3.9"
+
+# Local development docker-compose.
+# Runs the orchestrator with access to the host Docker daemon so it can
+# spin up challenge containers via LocalDockerProvider.
+#
+# Usage:
+#   cp .env.example .env        # fill in your secrets
+#   docker-compose up --build
+
+services:
+  orchestrator:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      PORT: "8080"
+      GIN_MODE: "debug"
+      LOG_LEVEL: "debug"
+      SANDBOX_PROVIDER: "local"
+      CHALLENGES_DIR: "/challenges"
+
+      # Timeouts (seconds)
+      PREWARM_TIMEOUT_SECS: "60"
+      CONTAINER_TIMEOUT_SECS: "3600"
+      INACTIVITY_TIMEOUT_SECS: "300"
+      HARD_LIMIT_SECS: "3600"
+
+      # Populated from .env file
+      CLERK_JWKS_URL: "${CLERK_JWKS_URL}"
+      UPSTASH_REDIS_URL: "${UPSTASH_REDIS_URL}"
+      UPSTASH_REDIS_TOKEN: "${UPSTASH_REDIS_TOKEN}"
+      SUPABASE_URL: "${SUPABASE_URL}"
+      SUPABASE_SERVICE_ROLE_KEY: "${SUPABASE_SERVICE_ROLE_KEY}"
+      ALLOWED_ORIGINS: "http://localhost:3000"
+
+    volumes:
+      # Give the orchestrator access to the host Docker socket so
+      # LocalDockerProvider can spin up challenge containers.
+      - /var/run/docker.sock:/var/run/docker.sock
+
+      # Mount the challenges directory so image Dockerfiles are accessible.
+      # Path is relative to the monorepo root (run docker-compose from there).
+      - ../../challenges:/challenges:ro
+
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
