@@ -1,33 +1,31 @@
 package api
 
 import (
+	"log/slog"
 	"net/http"
+	"strings"
 
 	"stacktrace/orchestrator/internal/clerk"
+	"stacktrace/orchestrator/internal/db"
 	"stacktrace/orchestrator/internal/middleware"
 	"stacktrace/orchestrator/internal/session"
-	"stacktrace/orchestrator/internal/supabase"
 
 	"github.com/gin-gonic/gin"
 )
 
-// handlers holds all injected dependencies for HTTP handler methods.
 type handlers struct {
 	sessions *session.Manager
 	verifier *clerk.JWTVerifier
-	supabase *supabase.Client
+	db       *db.Client
 }
 
-// ── Health ────────────────────────────────────────────────────────────────────
+// ── Health ─────────────────────────────────────────────────────────────────────
 
-// healthz godoc
-// GET /healthz
-// Used by Docker and Azure Container Apps readiness probes.
 func (h *handlers) healthz(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
-// ── Prewarm ───────────────────────────────────────────────────────────────────
+// ── Prewarm ────────────────────────────────────────────────────────────────────
 
 type prewarmRequest struct {
 	ChallengeID string `json:"challenge_id" binding:"required"`
@@ -38,29 +36,26 @@ type prewarmResponse struct {
 	SessionID string `json:"session_id"`
 }
 
-// prewarm godoc
-// POST /prewarm
-// No auth required. Starts a container before the user clicks "Start Challenge".
 func (h *handlers) prewarm(c *gin.Context) {
 	var req prewarmRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-
 	result, err := h.sessions.Prewarm(c.Request.Context(), req.ChallengeID, req.AnonToken)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to prewarm container"})
+		slog.Error("prewarm failed", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-
 	c.JSON(http.StatusAccepted, prewarmResponse{SessionID: result.SessionID})
 }
 
-// ── Start session ─────────────────────────────────────────────────────────────
+// ── Start session ──────────────────────────────────────────────────────────────
 
 type startSessionRequest struct {
-	AnonToken string `json:"anon_token" binding:"required,uuid"`
+	AnonToken   string `json:"anon_token"   binding:"required,uuid"`
+	ChallengeID string `json:"challenge_id" binding:"required"`
 }
 
 type startSessionResponse struct {
@@ -70,9 +65,6 @@ type startSessionResponse struct {
 	TerminalWSURL string `json:"terminal_ws_url"`
 }
 
-// startSession godoc
-// POST /sessions
-// Requires auth. Promotes a pre-warmed anon session to a real authenticated session.
 func (h *handlers) startSession(c *gin.Context) {
 	claims := middleware.GetClaims(c)
 
@@ -82,21 +74,23 @@ func (h *handlers) startSession(c *gin.Context) {
 		return
 	}
 
-	// Upsert the user (no-op if already exists)
-	if err := h.supabase.UpsertUser(c.Request.Context(), claims.Sub, claims.Email); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to upsert user"})
+	if err := h.db.UpsertUser(c.Request.Context(), claims.Sub, claims.Email); err != nil {
+		slog.Error("upsert user failed", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
 	result, err := h.sessions.Start(c.Request.Context(), claims.Sub, req.AnonToken)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
+		slog.Info("start via prewarm failed, trying on-demand", "error", err)
+		result, err = h.sessions.StartOnDemand(c.Request.Context(), claims.Sub, req.ChallengeID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
 	}
 
-	// Build the WebSocket URL the frontend will connect to for the terminal
 	wsURL := buildWSURL(c.Request, "/sessions/"+result.SessionID+"/terminal")
-
 	c.JSON(http.StatusCreated, startSessionResponse{
 		SessionID:     result.SessionID,
 		ContainerHost: result.ContainerHost,
@@ -105,7 +99,7 @@ func (h *handlers) startSession(c *gin.Context) {
 	})
 }
 
-// ── Get session ───────────────────────────────────────────────────────────────
+// ── Get session ────────────────────────────────────────────────────────────────
 
 type getSessionResponse struct {
 	SessionID     string `json:"session_id"`
@@ -115,9 +109,6 @@ type getSessionResponse struct {
 	ElapsedSecs   int64  `json:"elapsed_secs"`
 }
 
-// getSession godoc
-// GET /sessions/:id
-// Returns current session status and elapsed time.
 func (h *handlers) getSession(c *gin.Context) {
 	claims := middleware.GetClaims(c)
 	sessionID := c.Param("id")
@@ -127,8 +118,6 @@ func (h *handlers) getSession(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "session not found"})
 		return
 	}
-
-	// Enforce ownership — a user can only see their own sessions
 	if state.UserID != "" && state.UserID != claims.Sub {
 		c.JSON(http.StatusForbidden, gin.H{"error": "forbidden"})
 		return
@@ -148,20 +137,16 @@ func (h *handlers) getSession(c *gin.Context) {
 	})
 }
 
-// ── Exit session ──────────────────────────────────────────────────────────────
+// ── Exit session ───────────────────────────────────────────────────────────────
 
 type exitSessionResponse struct {
 	SavedFiles []string `json:"saved_files"`
 }
 
-// exitSession godoc
-// DELETE /sessions/:id
-// Clean Save & Exit. Saves all dirty files to Supabase, kills the container.
 func (h *handlers) exitSession(c *gin.Context) {
 	claims := middleware.GetClaims(c)
 	sessionID := c.Param("id")
 
-	// Ownership check before any mutation
 	state, err := h.sessions.GetState(c.Request.Context(), sessionID)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "session not found"})
@@ -174,24 +159,20 @@ func (h *handlers) exitSession(c *gin.Context) {
 
 	result, err := h.sessions.Exit(c.Request.Context(), sessionID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "exit failed"})
+		slog.Error("exit session failed", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-
 	c.JSON(http.StatusOK, exitSessionResponse{SavedFiles: result.SavedFiles})
 }
 
-// ── Write file ────────────────────────────────────────────────────────────────
+// ── Write file ─────────────────────────────────────────────────────────────────
 
 type writeFileRequest struct {
-	// FilePath is relative to /app inside the container, e.g. "src/db/write.js"
 	FilePath string `json:"file_path" binding:"required"`
 	Content  string `json:"content"   binding:"required"`
 }
 
-// writeFile godoc
-// POST /sessions/:id/files
-// Writes full file content into the container. Called by Monaco on 5–8s debounce.
 func (h *handlers) writeFile(c *gin.Context) {
 	claims := middleware.GetClaims(c)
 	sessionID := c.Param("id")
@@ -202,7 +183,6 @@ func (h *handlers) writeFile(c *gin.Context) {
 		return
 	}
 
-	// Ownership check
 	state, err := h.sessions.GetState(c.Request.Context(), sessionID)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "session not found"})
@@ -214,19 +194,15 @@ func (h *handlers) writeFile(c *gin.Context) {
 	}
 
 	if err := h.sessions.WriteFile(c.Request.Context(), sessionID, req.FilePath, req.Content); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "write failed"})
+		slog.Error("write file failed", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
-// ── Read file ─────────────────────────────────────────────────────────────────
+// ── Read file ──────────────────────────────────────────────────────────────────
 
-// readFile godoc
-// GET /sessions/:id/files?path=src/db/write.js
-// Reads file content from the container. Used when Monaco needs to hydrate
-// after a session resume.
 func (h *handlers) readFile(c *gin.Context) {
 	claims := middleware.GetClaims(c)
 	sessionID := c.Param("id")
@@ -249,22 +225,136 @@ func (h *handlers) readFile(c *gin.Context) {
 
 	content, err := h.sessions.ReadFile(c.Request.Context(), sessionID, filePath)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "read failed"})
+		slog.Error("read file failed", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-
 	c.JSON(http.StatusOK, gin.H{"file_path": filePath, "content": content})
 }
 
-// ── Resume session ────────────────────────────────────────────────────────────
+// ── List files (file tree) ─────────────────────────────────────────────────────
+// GET /sessions/:id/tree
+// Runs find inside the container and returns the file tree dynamically.
+// No manual file listing needed in challenge.json — works for any codebase.
+
+type fileTreeNode struct {
+	Name     string `json:"name"`
+	Path     string `json:"path"`
+	Type     string `json:"type"`     // "file" | "directory"
+	Language string `json:"language"` // derived from extension
+}
+
+func (h *handlers) listFiles(c *gin.Context) {
+	claims := middleware.GetClaims(c)
+	sessionID := c.Param("id")
+
+	state, err := h.sessions.GetState(c.Request.Context(), sessionID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "session not found"})
+		return
+	}
+	if state.UserID != claims.Sub {
+		c.JSON(http.StatusForbidden, gin.H{"error": "forbidden"})
+		return
+	}
+
+	// Run find inside the container, scoped to the challenge working directory.
+	// The root path is determined by the challenge's start_command location.
+	// For 01-silent-write this is /app/examples/web-service.
+	// We use /app as the root so future challenges with different structures work too.
+	output, err := h.sessions.ExecCommand(c.Request.Context(), sessionID,
+		[]string{"find", "/app/examples/web-service", "-not", "-path", "*/node_modules/*", "-not", "-name", ".*"})
+	if err != nil {
+		slog.Error("list files failed", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	nodes := parseFileTree(output)
+	c.JSON(http.StatusOK, gin.H{"files": nodes})
+}
+
+// parseFileTree converts find output lines into FileTreeNode structs.
+func parseFileTree(findOutput string) []fileTreeNode {
+	lines := strings.Split(strings.TrimSpace(findOutput), "\n")
+	nodes := make([]fileTreeNode, 0, len(lines))
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		// Strip the /app/ prefix to get the relative path
+		relativePath := strings.TrimPrefix(line, "/app/")
+
+		parts := strings.Split(relativePath, "/")
+		name := parts[len(parts)-1]
+
+		// Skip the root directory itself
+		if name == "." || relativePath == "" {
+			continue
+		}
+
+		// Determine if file or directory based on whether it has an extension
+		// find doesn't distinguish easily without -type, so we use the presence
+		// of a dot in the last segment as a heuristic. We'll use -type in the
+		// find command instead — but for now derive from the path.
+		nodeType := "file"
+		language := languageFromName(name)
+		if !strings.Contains(name, ".") {
+			nodeType = "directory"
+			language = ""
+		}
+
+		nodes = append(nodes, fileTreeNode{
+			Name:     name,
+			Path:     relativePath,
+			Type:     nodeType,
+			Language: language,
+		})
+	}
+	return nodes
+}
+
+func languageFromName(name string) string {
+	parts := strings.Split(name, ".")
+	if len(parts) < 2 {
+		return "plaintext"
+	}
+	ext := parts[len(parts)-1]
+	switch ext {
+	case "js", "mjs", "cjs":
+		return "javascript"
+	case "ts", "tsx":
+		return "typescript"
+	case "json":
+		return "json"
+	case "md":
+		return "markdown"
+	case "py":
+		return "python"
+	case "go":
+		return "go"
+	case "sh":
+		return "shell"
+	case "html":
+		return "html"
+	case "css":
+		return "css"
+	case "yml", "yaml":
+		return "yaml"
+	default:
+		return "plaintext"
+	}
+}
+
+// ── Resume session ─────────────────────────────────────────────────────────────
 
 type resumeSessionRequest struct {
 	ChallengeID string `json:"challenge_id" binding:"required"`
 }
 
-// resumeSession godoc
-// POST /sessions/:id/resume
-// :id is the previous (exited) session ID whose diffs will be replayed.
 func (h *handlers) resumeSession(c *gin.Context) {
 	claims := middleware.GetClaims(c)
 	previousSessionID := c.Param("id")
@@ -275,19 +365,20 @@ func (h *handlers) resumeSession(c *gin.Context) {
 		return
 	}
 
-	if err := h.supabase.UpsertUser(c.Request.Context(), claims.Sub, claims.Email); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to upsert user"})
+	if err := h.db.UpsertUser(c.Request.Context(), claims.Sub, claims.Email); err != nil {
+		slog.Error("upsert user failed (resume)", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
 	result, err := h.sessions.Resume(c.Request.Context(), claims.Sub, req.ChallengeID, previousSessionID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "resume failed"})
+		slog.Error("resume session failed", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
 	wsURL := buildWSURL(c.Request, "/sessions/"+result.SessionID+"/terminal")
-
 	c.JSON(http.StatusCreated, startSessionResponse{
 		SessionID:     result.SessionID,
 		ContainerHost: result.ContainerHost,
@@ -296,10 +387,8 @@ func (h *handlers) resumeSession(c *gin.Context) {
 	})
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// ── Helpers ────────────────────────────────────────────────────────────────────
 
-// buildWSURL derives the WebSocket URL for a given path from the incoming HTTP request.
-// Uses wss:// in production (X-Forwarded-Proto: https) and ws:// in development.
 func buildWSURL(r *http.Request, path string) string {
 	scheme := "ws"
 	if r.Header.Get("X-Forwarded-Proto") == "https" || r.TLS != nil {

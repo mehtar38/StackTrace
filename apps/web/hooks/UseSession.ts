@@ -16,13 +16,12 @@ import {
 import type { Session, SessionStatus } from '@/lib/types'
 
 const ANON_TOKEN_KEY = (challengeId: string) => `st_anon_${challengeId}`
-const DEBOUNCE_MS = 6000 // 6s — within the 5–8s window
+const DEBOUNCE_MS = 6000
 
 function getOrCreateAnonToken(challengeId: string): string {
   const key = ANON_TOKEN_KEY(challengeId)
   const existing = localStorage.getItem(key)
   if (existing) return existing
-  // Generate a v4-like UUID using the Web Crypto API (available in all modern browsers)
   const uuid = crypto.randomUUID()
   localStorage.setItem(key, uuid)
   return uuid
@@ -36,60 +35,54 @@ interface UseSessionReturn {
   session: Session | null
   status: SessionStatus
   error: string | null
-  // Called when user clicks "Start Challenge"
   startChallenge: () => Promise<void>
-  // Save all dirty files and kill the container
   exitChallenge: () => Promise<void>
-  // Debounced write — safe to call on every Monaco onChange
   writeFile: (path: string, content: string) => void
-  // Read a single file from the container (called after session becomes active)
   readFile: (path: string) => Promise<string>
 }
 
 export function useSession(challengeId: string): UseSessionReturn {
-  const { getToken } = useAuth()
+  const { getToken, isLoaded, isSignedIn } = useAuth()
   const [session, setSession] = useState<Session | null>(null)
   const [status, setStatus] = useState<SessionStatus>('idle')
   const [error, setError] = useState<string | null>(null)
 
-  // Debounce timers keyed by file path
   const debounceTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
-  // Track if prewarm has already been initiated (StrictMode fires effects twice)
   const prewarmAttempted = useRef(false)
 
   // ── Prewarm on mount ────────────────────────────────────────────────────────
+  // Fires silently in the background. Does NOT touch status at all —
+  // the overlay must show a normal button, not a spinner, until the user clicks.
   useEffect(() => {
+    if (!isLoaded || !isSignedIn) return
     if (prewarmAttempted.current) return
     prewarmAttempted.current = true
 
     const anonToken = getOrCreateAnonToken(challengeId)
 
-    setStatus('prewarming')
     prewarmSession(challengeId, anonToken)
       .then(() => {
-        // Container is warming up in the background.
-        // Status stays 'prewarming' until the user clicks Start.
-        // The orchestrator handles the ready state — we just fire and wait.
+        // Container is ready in the background. Status intentionally stays 'idle'.
       })
       .catch(err => {
-        // Non-fatal: prewarm failure just means Start will be slightly slower
-        // (orchestrator will spin up on-demand). Log but don't block the user.
+        // Non-fatal — Start will fall back to on-demand spin-up.
+        clearAnonToken(challengeId)
+        prewarmAttempted.current = false
         console.warn('[useSession] prewarm failed (non-fatal):', err.message)
-        setStatus('idle')
       })
-  }, [challengeId])
+  }, [isLoaded, isSignedIn, challengeId])
 
   // ── Start challenge ─────────────────────────────────────────────────────────
   const startChallenge = useCallback(async () => {
     setError(null)
-    setStatus('prewarming') // show spinner while we wait for the Start response
+    setStatus('prewarming') // spinner only appears NOW, when user clicked
 
     try {
       const anonToken = getOrCreateAnonToken(challengeId)
-      const newSession = await startSession(anonToken, getToken)
+      const newSession = await startSession(anonToken, challengeId, getToken)
       setSession(newSession)
       setStatus('active')
-      clearAnonToken(challengeId) // token is consumed; clean up localStorage
+      clearAnonToken(challengeId)
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to start session'
       setError(message)
@@ -101,7 +94,6 @@ export function useSession(challengeId: string): UseSessionReturn {
   const writeFile = useCallback((path: string, content: string) => {
     if (!session || status !== 'active') return
 
-    // Cancel any pending write for this path
     const existing = debounceTimers.current.get(path)
     if (existing) clearTimeout(existing)
 
@@ -110,8 +102,6 @@ export function useSession(challengeId: string): UseSessionReturn {
       try {
         await apiWriteFile(session.sessionId, path, content, getToken)
       } catch (err) {
-        // Non-fatal: write failures are logged but don't interrupt the user.
-        // The dirty-file set in Redis means we'll catch it on the next write.
         console.error('[useSession] write file failed:', err)
       }
     }, DEBOUNCE_MS)
@@ -129,10 +119,7 @@ export function useSession(challengeId: string): UseSessionReturn {
   const exitChallenge = useCallback(async () => {
     if (!session) return
 
-    // Flush all pending debounced writes before exiting
-    for (const [, timer] of debounceTimers.current) {
-      clearTimeout(timer)
-    }
+    for (const [, timer] of debounceTimers.current) clearTimeout(timer)
     debounceTimers.current.clear()
 
     try {
@@ -142,7 +129,6 @@ export function useSession(challengeId: string): UseSessionReturn {
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Exit failed'
       setError(message)
-      // Don't block navigation even if exit API fails — container will expire
     }
   }, [session, getToken])
 
@@ -150,20 +136,9 @@ export function useSession(challengeId: string): UseSessionReturn {
   useEffect(() => {
     const timers = debounceTimers.current
     return () => {
-      // Clear all pending debounce timers on unmount
-      for (const [, timer] of timers) {
-        clearTimeout(timer)
-      }
+      for (const [, timer] of timers) clearTimeout(timer)
     }
   }, [])
 
-  return {
-    session,
-    status,
-    error,
-    startChallenge,
-    exitChallenge,
-    writeFile,
-    readFile,
-  }
+  return { session, status, error, startChallenge, exitChallenge, writeFile, readFile }
 }

@@ -11,6 +11,8 @@ import { HintsPanel } from './HintsPanel'
 import { AIPanel } from './aiPanel'
 import { StartChallengeOverlay } from './StartChallengeOverlay'
 import { useSession } from '@/hooks/UseSession'
+import { getFileTree } from '@/lib/api/orchestrator'
+import type { FileTreeNode } from '@/lib/api/orchestrator'
 import type { Challenge, FileNode, AIMessage } from '@/lib/types'
 
 const TerminalPanel = dynamic(
@@ -39,6 +41,7 @@ export function ChallengeIDE({ challenge, fileTree }: ChallengeIDEProps) {
   // ── File contents (fetched from orchestrator after session starts) ─────────
   const [fileContents, setFileContents] = useState<Map<string, string>>(new Map())
   const [loadingFiles, setLoadingFiles] = useState(false)
+  const [liveFileTree, setLiveFileTree] = useState<FileTreeNode[]>([])
 
   // ── Hints state (HintsPanel is fully controlled) ───────────────────────────
   const [revealedIndices, setRevealedIndices] = useState<number[]>([])
@@ -82,11 +85,26 @@ export function ChallengeIDE({ challenge, fileTree }: ChallengeIDEProps) {
 
     async function loadFiles() {
       setLoadingFiles(true)
-      const paths = fileTree.filter(f => f.type === 'file').map(f => f.path)
+
+      // Fetch live file tree from the container
+      let tree: FileTreeNode[] = []
+      try {
+        tree = await getFileTree(session.sessionId, getToken)
+        setLiveFileTree(tree)
+      } catch (err) {
+        console.error('[ChallengeIDE] failed to fetch file tree:', err)
+        // Fall back to static file tree from challenge.json
+        tree = fileTree.map(f => ({ name: f.name, path: f.path, type: f.type as 'file' | 'directory', language: f.language ?? 'plaintext' }))
+      }
+
+      const paths = tree.filter(f => f.type === 'file').map(f => f.path)
       const entries = await Promise.all(
         paths.map(async (path): Promise<[string, string]> => {
           try { return [path, await readFile(path)] }
-          catch { return [path, ''] }
+          catch (e) {
+            console.warn('[ChallengeIDE] failed to read file:', path, e)
+            return [path, '']
+          }
         })
       )
       if (!cancelled) {
@@ -158,7 +176,7 @@ export function ChallengeIDE({ challenge, fileTree }: ChallengeIDEProps) {
           right={
             <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
               <FileExplorer
-                files={fileTree}
+                files={liveFileTree.length > 0 ? liveFileTree : fileTree}
                 selectedPath={selectedFile?.path ?? null}
                 onSelect={handleFileSelect}
                 isLocked={isLocked}

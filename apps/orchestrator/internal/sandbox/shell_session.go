@@ -53,18 +53,20 @@ func (s *dockerShellSession) Close() error {
 
 var _ ShellSession = (*dockerShellSession)(nil)
 
-// azureShellSession is a placeholder for the ACA implementation.
-type azureShellSession struct{}
+// awsExecShellSession is a placeholder for the ECS Exec implementation.
+// Real implementation will wrap an SSM Session Manager plugin subprocess,
+// since the AWS SDK does not expose a native bidirectional session client.
+type awsExecShellSession struct{}
 
-func (s *azureShellSession) Write(p []byte) (int, error) {
-	return 0, fmt.Errorf("azure shell session not yet implemented")
+func (s *awsExecShellSession) Write(p []byte) (int, error) {
+	return 0, fmt.Errorf("aws ecs exec shell session not yet implemented")
 }
-func (s *azureShellSession) Read(p []byte) (int, error) {
-	return 0, fmt.Errorf("azure shell session not yet implemented")
+func (s *awsExecShellSession) Read(p []byte) (int, error) {
+	return 0, fmt.Errorf("aws ecs exec shell session not yet implemented")
 }
-func (s *azureShellSession) Resize(rows, cols uint16) error {
-	return fmt.Errorf("azure shell session not yet implemented")
+func (s *awsExecShellSession) Resize(rows, cols uint16) error {
+	return fmt.Errorf("aws ecs exec shell session not yet implemented")
 }
-func (s *azureShellSession) Close() error { return nil }
+func (s *awsExecShellSession) Close() error { return nil }
 
-var _ ShellSession = (*azureShellSession)(nil)
+var _ ShellSession = (*awsExecShellSession)(nil)
