@@ -3,7 +3,7 @@
   "title": "The Silent Write",
   "difficulty": "intro",
   "category": "API Debugging",
-  "working_dir": "/examples/web-service", 
+  "working_dir": "", 
   "estimatedMins": 15,
   "stack": [
     "Node.js",

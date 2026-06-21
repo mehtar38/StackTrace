@@ -12,6 +12,7 @@ import {
   writeFile as apiWriteFile,
   exitSession as apiExitSession,
   readFile as apiReadFile,
+  getFileTree as apiGetFileTree,
 } from '@/lib/api/orchestrator'
 import type { Session, SessionStatus } from '@/lib/types'
 
@@ -39,6 +40,7 @@ interface UseSessionReturn {
   exitChallenge: () => Promise<void>
   writeFile: (path: string, content: string) => void
   readFile: (path: string) => Promise<string>
+  getFileTree: () => Promise<unknown>
 }
 
 export function useSession(challengeId: string): UseSessionReturn {
@@ -115,6 +117,11 @@ export function useSession(challengeId: string): UseSessionReturn {
     return apiReadFile(session.sessionId, path, getToken)
   }, [session, getToken])
 
+  const getFileTree = useCallback(async () => {
+  if (!session) throw new Error('No active session')
+  return apiGetFileTree(session.sessionId, getToken)
+  }, [session, getToken])
+
   // ── Exit challenge ──────────────────────────────────────────────────────────
   const exitChallenge = useCallback(async () => {
     if (!session) return
@@ -140,5 +147,5 @@ export function useSession(challengeId: string): UseSessionReturn {
     }
   }, [])
 
-  return { session, status, error, startChallenge, exitChallenge, writeFile, readFile }
+  return { session, status, error, startChallenge, exitChallenge, writeFile, readFile, getFileTree }
 }

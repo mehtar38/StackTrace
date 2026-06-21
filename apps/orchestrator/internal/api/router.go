@@ -18,6 +18,7 @@ type RouterDeps struct {
 	SessionManager *session.Manager
 	ClerkVerifier  *clerk.JWTVerifier
 	DB             *db.Client
+	ChallengesDir  string
 }
 
 // NewRouter constructs and returns the fully configured Gin engine.
@@ -32,9 +33,10 @@ func NewRouter(deps RouterDeps) http.Handler {
 	r.Use(corsMiddleware())
 
 	h := &handlers{
-		sessions: deps.SessionManager,
-		verifier: deps.ClerkVerifier,
-		db:       deps.DB,
+		sessions:      deps.SessionManager,
+		verifier:      deps.ClerkVerifier,
+		db:            deps.DB,
+		challengesDir: deps.ChallengesDir,
 	}
 
 	// Health check — no auth, used by Docker/ACA readiness probes

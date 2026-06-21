@@ -4,14 +4,13 @@ import { useCallback, useEffect, useState } from 'react'
 import dynamic from 'next/dynamic'
 import Editor from '@monaco-editor/react'
 import { useRouter } from 'next/navigation'
-import { ResizableLayout } from './ResizeableLayout'
+import { ResizableEditor, ResizableLayout } from './ResizeableLayout'
 import { FileExplorer } from './FileExplorer'
 import { ProblemPanel } from './ProblemPanel'
 import { HintsPanel } from './HintsPanel'
 import { AIPanel } from './aiPanel'
 import { StartChallengeOverlay } from './StartChallengeOverlay'
 import { useSession } from '@/hooks/UseSession'
-import { getFileTree } from '@/lib/api/orchestrator'
 import type { FileTreeNode } from '@/lib/api/orchestrator'
 import type { Challenge, FileNode, AIMessage } from '@/lib/types'
 
@@ -73,7 +72,7 @@ export function ChallengeIDE({ challenge, fileTree }: ChallengeIDEProps) {
   }, [aiInput, aiLoading])
 
   // ── Session ────────────────────────────────────────────────────────────────
-  const { session, status, error, startChallenge, exitChallenge, writeFile, readFile } =
+  const { session, status, error, startChallenge, exitChallenge, writeFile, readFile, getFileTree } =
     useSession(challenge.id)
 
   // ── Load file contents once session becomes active ─────────────────────────
@@ -89,7 +88,7 @@ export function ChallengeIDE({ challenge, fileTree }: ChallengeIDEProps) {
       // Fetch live file tree from the container
       let tree: FileTreeNode[] = []
       try {
-        tree = await getFileTree(session.sessionId, getToken)
+        tree = await getFileTree()
         setLiveFileTree(tree)
       } catch (err) {
         console.error('[ChallengeIDE] failed to fetch file tree:', err)
@@ -174,60 +173,58 @@ export function ChallengeIDE({ challenge, fileTree }: ChallengeIDEProps) {
             />
           }
           right={
-            <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+            <ResizableEditor
+              explorer={
               <FileExplorer
                 files={liveFileTree.length > 0 ? liveFileTree : fileTree}
                 selectedPath={selectedFile?.path ?? null}
                 onSelect={handleFileSelect}
                 isLocked={isLocked}
               />
-
-              <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
-                {isLocked && (
-                  <StartChallengeOverlay
-                    status={status === 'idle' || status === 'prewarming' || status === 'error'
-                      ? status : 'idle'}
-                    error={error}
-                    onStart={startChallenge}
-                  />
-                )}
-                <div style={{
-                  height: '100%',
-                  pointerEvents: isLocked ? 'none' : 'auto',
-                  opacity: isLocked ? 0.35 : 1,
-                  transition: 'opacity 0.2s ease',
-                }}>
-                  {loadingFiles ? <EditorLoadingState /> : (
-                    <Editor
-                      height="100%"
-                      language={currentLanguage}
-                      value={isLocked ? '' : currentContent}
-                      theme="vs-dark"
-                      onChange={handleEditorChange}
-                      options={{
-                        fontSize: 13,
-                        fontFamily: '"Geist Mono", "Fira Code", monospace',
-                        minimap: { enabled: false },
-                        scrollBeyondLastLine: false,
-                        lineNumbers: 'on',
-                        readOnly: isLocked,
-                        wordWrap: 'on',
-                        padding: { top: 12 },
-                        renderLineHighlight: 'line',
-                        cursorBlinking: 'smooth',
-                      }}
-                    />
+              }
+              editor={
+              <div style={{height: '100%', display: 'flex', flexDirection: 'column' }}><div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
+                  {isLocked && (
+                    <StartChallengeOverlay
+                      status={status === 'idle' || status === 'prewarming' || status === 'error'
+                        ? status : 'idle'}
+                      error={error}
+                      onStart={startChallenge} />
                   )}
-                </div>
-              </div>
-
-              <TerminalStrip
-                sessionId={session?.sessionId ?? null}
-                isOpen={isTerminalOpen}
-                isActive={status === 'active'}
-                onToggle={() => setIsTerminalOpen(v => !v)}
-              />
-            </div>
+                  <div style={{
+                    height: '100%',
+                    pointerEvents: isLocked ? 'none' : 'auto',
+                    opacity: isLocked ? 0.35 : 1,
+                    transition: 'opacity 0.2s ease',
+                  }}>
+                    {loadingFiles ? <EditorLoadingState /> : (
+                      <Editor
+                        height="100%"
+                        language={currentLanguage}
+                        value={isLocked ? '' : currentContent}
+                        theme="vs-dark"
+                        onChange={handleEditorChange}
+                        options={{
+                          fontSize: 13,
+                          fontFamily: '"Geist Mono", "Fira Code", monospace',
+                          minimap: { enabled: false },
+                          scrollBeyondLastLine: false,
+                          lineNumbers: 'on',
+                          readOnly: isLocked,
+                          wordWrap: 'on',
+                          padding: { top: 12 },
+                          renderLineHighlight: 'line',
+                          cursorBlinking: 'smooth',
+                        }} />
+                    )}
+                  </div>
+                </div><TerminalStrip
+                    sessionId={session?.sessionId ?? null}
+                    isOpen={isTerminalOpen}
+                    isActive={status === 'active'}
+                    onToggle={() => setIsTerminalOpen(v => !v)} /></div>
+          }
+          />
           }
         />
       </div>

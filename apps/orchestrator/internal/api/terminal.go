@@ -31,7 +31,7 @@ type terminalMessage struct {
 }
 
 // terminal handles WebSocket upgrades for the container PTY.
-//
+
 // Auth note: the browser WebSocket API cannot send custom HTTP headers during
 // the upgrade. We use Sec-WebSocket-Protocol as a token carrier instead.
 // The frontend sends: Sec-WebSocket-Protocol: bearer.<clerk_jwt>
@@ -67,7 +67,7 @@ func (h *handlers) terminal(c *gin.Context) {
 
 	// Echo subprotocol back so the browser completes the handshake
 	responseHeader := http.Header{}
-	responseHeader.Set("Sec-WebSocket-Protocol", "bearer.ok")
+	responseHeader.Set("Sec-WebSocket-Protocol", "bearer."+token)
 
 	conn, err := upgrader.Upgrade(c.Writer, c.Request, responseHeader)
 	if err != nil {

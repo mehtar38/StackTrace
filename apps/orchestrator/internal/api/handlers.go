@@ -1,8 +1,12 @@
 package api
 
 import (
+	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"stacktrace/orchestrator/internal/clerk"
@@ -14,9 +18,10 @@ import (
 )
 
 type handlers struct {
-	sessions *session.Manager
-	verifier *clerk.JWTVerifier
-	db       *db.Client
+	sessions      *session.Manager
+	verifier      *clerk.JWTVerifier
+	db            *db.Client
+	challengesDir string
 }
 
 // ── Health ─────────────────────────────────────────────────────────────────────
@@ -258,26 +263,67 @@ func (h *handlers) listFiles(c *gin.Context) {
 		return
 	}
 
-	// Run find inside the container, scoped to the challenge working directory.
-	// The root path is determined by the challenge's start_command location.
-	// For 01-silent-write this is /app/examples/web-service.
-	// We use /app as the root so future challenges with different structures work too.
+	// working_dir comes from challenge.json — each challenge controls its own
+	// scope so the orchestrator never hardcodes a path for any specific challenge.
+	workingDir, err := h.getWorkingDir(state.ChallengeID)
+	if err != nil {
+		slog.Error("failed to read working_dir", "error", err, "challenge", state.ChallengeID)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	containerRoot := "/app/" + workingDir
+	if workingDir != "" {
+		containerRoot = "/app/" + workingDir
+	}
+
+	// -mindepth 1 excludes the root directory itself from the output, so we
+	// don't need to special-case it when parsing.
 	output, err := h.sessions.ExecCommand(c.Request.Context(), sessionID,
-		[]string{"find", "/app/examples/web-service", "-not", "-path", "*/node_modules/*", "-not", "-name", ".*"})
+		[]string{"find", containerRoot, "-mindepth", "1", "-not", "-path", "*/node_modules/*", "-not", "-path", "*/node_modules", "-not", "-name", ".*"})
 	if err != nil {
 		slog.Error("list files failed", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	nodes := parseFileTree(output)
+	// Paths returned to the frontend are relative to /app (NOT to containerRoot)
+	// so they match exactly what ReadFile/WriteFile expect — those functions
+	// always prepend "/app/" and nothing else, regardless of working_dir.
+	nodes := parseFileTree(output, "/app/")
 	c.JSON(http.StatusOK, gin.H{"files": nodes})
 }
 
+// getWorkingDir reads challenge.json from disk and returns its working_dir
+// field. This is the single source of truth for where a challenge's editable
+// code lives inside its container — keeps the orchestrator generic across
+// any challenge's folder structure.
+func (h *handlers) getWorkingDir(challengeID string) (string, error) {
+	path := filepath.Join(h.challengesDir, challengeID, "challenge.json")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read challenge.json: %w", err)
+	}
+
+	var parsed struct {
+		WorkingDir string `json:"working_dir"`
+	}
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		return "", fmt.Errorf("parse challenge.json: %w", err)
+	}
+	return parsed.WorkingDir, nil
+}
+
 // parseFileTree converts find output lines into FileTreeNode structs.
-func parseFileTree(findOutput string) []fileTreeNode {
+// Paths returned are relative to /app — ReadFile and WriteFile are the only
+// functions that ever add the "/app/" prefix back (via containerFilePath),
+// so there is exactly one place in the whole codebase that knows about /app,
+// and the tree's paths always match what those functions expect to receive.
+func parseFileTree(findOutput, appPrefix string) []fileTreeNode {
 	lines := strings.Split(strings.TrimSpace(findOutput), "\n")
 	nodes := make([]fileTreeNode, 0, len(lines))
+
+	prefix := appPrefix
 
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
@@ -285,21 +331,18 @@ func parseFileTree(findOutput string) []fileTreeNode {
 			continue
 		}
 
-		// Strip the /app/ prefix to get the relative path
-		relativePath := strings.TrimPrefix(line, "/app/")
+		// Strip the container root prefix (e.g. "/app/examples/web-service/")
+		// so the path returned to the frontend matches exactly what ReadFile
+		// and WriteFile expect to receive.
+		relativePath := strings.TrimPrefix(line, prefix)
+		if relativePath == line {
+			// Prefix didn't match — skip rather than risk a malformed path
+			continue
+		}
 
 		parts := strings.Split(relativePath, "/")
 		name := parts[len(parts)-1]
 
-		// Skip the root directory itself
-		if name == "." || relativePath == "" {
-			continue
-		}
-
-		// Determine if file or directory based on whether it has an extension
-		// find doesn't distinguish easily without -type, so we use the presence
-		// of a dot in the last segment as a heuristic. We'll use -type in the
-		// find command instead — but for now derive from the path.
 		nodeType := "file"
 		language := languageFromName(name)
 		if !strings.Contains(name, ".") {
