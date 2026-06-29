@@ -6,7 +6,7 @@
 // import { notFound, redirect } from 'next/navigation'
 // import { auth } from '@clerk/nextjs/server'
 // import { ChallengeIDE } from '@/components/challenge/ChallengeIDE'
-// import { getChallengeById, getChallengeFileTree } from '@/lib/api/challenges'
+import { getChallengeById, getChallengeFileTree } from '@/lib/api/challenges'
 
 // interface ChallengePageProps {
 //   params: { id: string }
@@ -39,6 +39,19 @@
 //   )
 // }
 
-export default function Page() {
-  return <div>challenge route works</div>
+export default async function ChallengePage({ params }: any) {
+  const { id } = params
+
+  try {
+    const [challengeRes, fileTreeRes] = await Promise.all([
+      getChallengeById(id),
+      getChallengeFileTree(id),
+    ])
+
+    // eslint-disable-next-line react-hooks/error-boundaries
+    return <pre>{JSON.stringify({ challengeRes, fileTreeRes }, null, 2)}</pre>
+  } catch (e) {
+    console.error("CHALLENGE PAGE FAILED", e)
+    return <div>failed to load challenge</div>
+  }
 }
