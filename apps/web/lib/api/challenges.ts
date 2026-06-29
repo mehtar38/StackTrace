@@ -8,8 +8,6 @@
 import type { ApiResponse, Challenge, ChallengeSummary, FileContent, FileNode } from '@/lib/types'
 import { MOCK_FILE_CONTENTS, MOCK_FILE_TREE } from '@/lib/mock/challenges'
 
-// const BASE = '/api'
-
 export async function getChallenges(): Promise<ApiResponse<ChallengeSummary[]>> {
     const baseUrl = process.env.NEXT_PUBLIC_VERCEL_URL
     if (!baseUrl) {
@@ -22,20 +20,13 @@ export async function getChallenges(): Promise<ApiResponse<ChallengeSummary[]>> 
 
     return res.json()
   }
-export async function getChallengeById(id: string): Promise<ApiResponse<Challenge>> {
-    const baseUrl = process.env.NEXT_PUBLIC_VERCEL_URL 
-  if (!baseUrl) {
-    throw new Error('NEXT_PUBLIC_VERCEL_URL is not set')
-  }
-
-  const res = await fetch(`${baseUrl}/api/challenges/${id}`, {
+export async function getChallengeById(id: string) {
+  const res = await fetch(`/api/challenges/${id}`, {
     next: { revalidate: 60 },
   })
 
   return res.json()
 }
-
-
 // File system — mock until orchestrator is ready
 export async function getChallengeFileTree(challengeId: string): Promise<ApiResponse<FileNode[]>> {
   void challengeId

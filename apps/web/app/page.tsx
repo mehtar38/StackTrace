@@ -5,7 +5,16 @@ import Link from 'next/link'
 import { useState } from 'react'
 import { SignInButton, SignUpButton, UserButton, useAuth } from '@clerk/nextjs'
 
-const CHALLENGES = [
+const CHALLENGES: {
+  id: string
+  title: string
+  difficulty: string
+  category: string
+  stack: string[]
+  completed: boolean
+  attempted: boolean
+  estimatedMins: number
+}[] = [
   {
     id: '01-silent-write',
     title: 'The Silent Write',
@@ -247,6 +256,7 @@ function ChallengeTable({ challenges }: { challenges: typeof CHALLENGES }) {
 }
 
 function ChallengeRow({ challenge: c, isLast }: { challenge: typeof CHALLENGES[0]; isLast: boolean }) {
+  console.log('challenge row', c)
   const diff = DIFFICULTY_META[c.difficulty]
 
   return (
