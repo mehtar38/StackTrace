@@ -4,14 +4,16 @@ import { useCallback, useEffect, useState } from 'react'
 import dynamic from 'next/dynamic'
 import Editor from '@monaco-editor/react'
 import { useRouter } from 'next/navigation'
-import { ResizableLayout } from './ResizeableLayout'
+import { ResizableEditor, ResizableLayout } from './ResizeableLayout'
 import { FileExplorer } from './FileExplorer'
 import { ProblemPanel } from './ProblemPanel'
 import { HintsPanel } from './HintsPanel'
 import { AIPanel } from './aiPanel'
 import { StartChallengeOverlay } from './StartChallengeOverlay'
 import { useSession } from '@/hooks/UseSession'
+import type { FileTreeNode } from '@/lib/api/orchestrator'
 import type { Challenge, FileNode, AIMessage } from '@/lib/types'
+import { useAuth } from '@clerk/nextjs'
 
 const TerminalPanel = dynamic(
   () => import('./TerminalPanel'),
@@ -27,6 +29,7 @@ type LeftTab = 'problem' | 'hints' | 'ai'
 
 export function ChallengeIDE({ challenge, fileTree }: ChallengeIDEProps) {
   const router = useRouter()
+  const { getToken: getClerkToken } = useAuth()
 
   // ── UI state ───────────────────────────────────────────────────────────────
   const [leftTab, setLeftTab] = useState<LeftTab>('problem')
@@ -39,6 +42,7 @@ export function ChallengeIDE({ challenge, fileTree }: ChallengeIDEProps) {
   // ── File contents (fetched from orchestrator after session starts) ─────────
   const [fileContents, setFileContents] = useState<Map<string, string>>(new Map())
   const [loadingFiles, setLoadingFiles] = useState(false)
+  const [liveFileTree, setLiveFileTree] = useState<FileTreeNode[]>([])
 
   // ── Hints state (HintsPanel is fully controlled) ───────────────────────────
   const [revealedIndices, setRevealedIndices] = useState<number[]>([])
@@ -70,7 +74,7 @@ export function ChallengeIDE({ challenge, fileTree }: ChallengeIDEProps) {
   }, [aiInput, aiLoading])
 
   // ── Session ────────────────────────────────────────────────────────────────
-  const { session, status, error, startChallenge, exitChallenge, writeFile, readFile } =
+  const { session, status, error, startChallenge, exitChallenge, writeFile, readFileWithToken, getFileTree } =
     useSession(challenge.id)
 
   // ── Load file contents once session becomes active ─────────────────────────
@@ -82,13 +86,51 @@ export function ChallengeIDE({ challenge, fileTree }: ChallengeIDEProps) {
 
     async function loadFiles() {
       setLoadingFiles(true)
-      const paths = fileTree.filter(f => f.type === 'file').map(f => f.path)
-      const entries = await Promise.all(
-        paths.map(async (path): Promise<[string, string]> => {
-          try { return [path, await readFile(path)] }
-          catch { return [path, ''] }
-        })
-      )
+
+    const token = await getClerkToken()
+    if (!token) {
+      console.error('[ChallengeIDE] no auth token available, aborting file load')
+      setLoadingFiles(false)
+      return
+    }  
+
+      // Fetch live file tree from the container
+      let tree: FileTreeNode[] = []
+      try {
+        tree = await getFileTree()
+        setLiveFileTree(tree)
+      } catch (err) {
+        console.error('[ChallengeIDE] failed to fetch file tree:', err)
+        // Fall back to static file tree from challenge.json
+        tree = fileTree.map(f => ({ name: f.name, path: f.path, type: f.type as 'file' | 'directory', language: f.language ?? 'plaintext' }))
+      }
+
+const paths = tree.filter(f => f.type === 'file').map(f => f.path)
+      const CHUNK_SIZE = 30
+      const entries: [string, string][] = []
+
+      for (let i = 0; i < paths.length; i += CHUNK_SIZE) {
+        if (cancelled) break
+
+        const chunk = paths.slice(i, i + CHUNK_SIZE)
+        const freshToken = await getClerkToken()
+        if (!freshToken) {
+          console.error('[ChallengeIDE] lost auth token mid-load, aborting remaining files')
+          break
+        }
+
+        const chunkResults = await Promise.all(
+          chunk.map(async (path): Promise<[string, string]> => {
+            try { return [path, await readFileWithToken(path, freshToken)] }
+            catch (e) {
+              console.warn('[ChallengeIDE] failed to read file:', path, e)
+              return [path, '']
+            }
+          })
+        )
+        entries.push(...chunkResults)
+      }
+
       if (!cancelled) {
         setFileContents(new Map(entries))
         setLoadingFiles(false)
@@ -156,60 +198,58 @@ export function ChallengeIDE({ challenge, fileTree }: ChallengeIDEProps) {
             />
           }
           right={
-            <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+            <ResizableEditor
+              explorer={
               <FileExplorer
-                files={fileTree}
+                files={liveFileTree.length > 0 ? liveFileTree : fileTree}
                 selectedPath={selectedFile?.path ?? null}
                 onSelect={handleFileSelect}
                 isLocked={isLocked}
               />
-
-              <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
-                {isLocked && (
-                  <StartChallengeOverlay
-                    status={status === 'idle' || status === 'prewarming' || status === 'error'
-                      ? status : 'idle'}
-                    error={error}
-                    onStart={startChallenge}
-                  />
-                )}
-                <div style={{
-                  height: '100%',
-                  pointerEvents: isLocked ? 'none' : 'auto',
-                  opacity: isLocked ? 0.35 : 1,
-                  transition: 'opacity 0.2s ease',
-                }}>
-                  {loadingFiles ? <EditorLoadingState /> : (
-                    <Editor
-                      height="100%"
-                      language={currentLanguage}
-                      value={isLocked ? '' : currentContent}
-                      theme="vs-dark"
-                      onChange={handleEditorChange}
-                      options={{
-                        fontSize: 13,
-                        fontFamily: '"Geist Mono", "Fira Code", monospace',
-                        minimap: { enabled: false },
-                        scrollBeyondLastLine: false,
-                        lineNumbers: 'on',
-                        readOnly: isLocked,
-                        wordWrap: 'on',
-                        padding: { top: 12 },
-                        renderLineHighlight: 'line',
-                        cursorBlinking: 'smooth',
-                      }}
-                    />
+              }
+              editor={
+              <div style={{height: '100%', display: 'flex', flexDirection: 'column' }}><div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
+                  {isLocked && (
+                    <StartChallengeOverlay
+                      status={status === 'idle' || status === 'prewarming' || status === 'error'
+                        ? status : 'idle'}
+                      error={error}
+                      onStart={startChallenge} />
                   )}
-                </div>
-              </div>
-
-              <TerminalStrip
-                sessionId={session?.sessionId ?? null}
-                isOpen={isTerminalOpen}
-                isActive={status === 'active'}
-                onToggle={() => setIsTerminalOpen(v => !v)}
-              />
-            </div>
+                  <div style={{
+                    height: '100%',
+                    pointerEvents: isLocked ? 'none' : 'auto',
+                    opacity: isLocked ? 0.35 : 1,
+                    transition: 'opacity 0.2s ease',
+                  }}>
+                    {loadingFiles ? <EditorLoadingState /> : (
+                      <Editor
+                        height="100%"
+                        language={currentLanguage}
+                        value={isLocked ? '' : currentContent}
+                        theme="vs-dark"
+                        onChange={handleEditorChange}
+                        options={{
+                          fontSize: 13,
+                          fontFamily: '"Geist Mono", "Fira Code", monospace',
+                          minimap: { enabled: false },
+                          scrollBeyondLastLine: false,
+                          lineNumbers: 'on',
+                          readOnly: isLocked,
+                          wordWrap: 'on',
+                          padding: { top: 12 },
+                          renderLineHighlight: 'line',
+                          cursorBlinking: 'smooth',
+                        }} />
+                    )}
+                  </div>
+                </div><TerminalStrip
+                    sessionId={session?.sessionId ?? null}
+                    isOpen={isTerminalOpen}
+                    isActive={status === 'active'}
+                    onToggle={() => setIsTerminalOpen(v => !v)} /></div>
+          }
+          />
           }
         />
       </div>

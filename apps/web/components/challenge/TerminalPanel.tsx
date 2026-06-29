@@ -18,10 +18,12 @@ export default function TerminalPanel({ sessionId, isVisible }: TerminalPanelPro
   const terminalRef = useRef<HTMLDivElement>(null)
   const xtermRef = useRef<import('@xterm/xterm').Terminal | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
+  const initStartedRef = useRef(false)
   const { getToken } = useAuth()
 
   useEffect(() => {
-    if (!isVisible || !terminalRef.current || xtermRef.current) return
+   if (!isVisible || !terminalRef.current || initStartedRef.current) return
+initStartedRef.current = true
 
     let terminal: import('@xterm/xterm').Terminal
     let ws: WebSocket
@@ -154,6 +156,7 @@ export default function TerminalPanel({ sessionId, isVisible }: TerminalPanelPro
     return () => {
       ws?.close()
       terminal?.dispose()
+      initStartedRef.current = false
       xtermRef.current = null
       wsRef.current = null
     }

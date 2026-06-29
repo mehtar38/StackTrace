@@ -6,9 +6,9 @@ import (
 	"os"
 
 	"stacktrace/orchestrator/internal/clerk"
+	"stacktrace/orchestrator/internal/db"
 	"stacktrace/orchestrator/internal/middleware"
 	"stacktrace/orchestrator/internal/session"
-	"stacktrace/orchestrator/internal/supabase"
 
 	"github.com/gin-gonic/gin"
 )
@@ -17,7 +17,8 @@ import (
 type RouterDeps struct {
 	SessionManager *session.Manager
 	ClerkVerifier  *clerk.JWTVerifier
-	Supabase       *supabase.Client
+	DB             *db.Client
+	ChallengesDir  string
 }
 
 // NewRouter constructs and returns the fully configured Gin engine.
@@ -32,9 +33,10 @@ func NewRouter(deps RouterDeps) http.Handler {
 	r.Use(corsMiddleware())
 
 	h := &handlers{
-		sessions: deps.SessionManager,
-		verifier: deps.ClerkVerifier,
-		supabase: deps.Supabase,
+		sessions:      deps.SessionManager,
+		verifier:      deps.ClerkVerifier,
+		db:            deps.DB,
+		challengesDir: deps.ChallengesDir,
 	}
 
 	// Health check — no auth, used by Docker/ACA readiness probes
@@ -57,6 +59,7 @@ func NewRouter(deps RouterDeps) http.Handler {
 		auth.POST("/:id/files", h.writeFile)
 		auth.GET("/:id/files", h.readFile)
 		auth.POST("/:id/resume", h.resumeSession)
+		auth.GET("/:id/tree", h.listFiles)
 	}
 
 	return r

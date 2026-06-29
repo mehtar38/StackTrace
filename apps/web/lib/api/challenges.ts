@@ -8,7 +8,7 @@
 import type { ApiResponse, Challenge, ChallengeSummary, FileContent, FileNode } from '@/lib/types'
 import { MOCK_FILE_CONTENTS, MOCK_FILE_TREE } from '@/lib/mock/challenges'
 
-const BASE = '/api'
+// const BASE = '/api'
 
 export async function getChallenges(): Promise<ApiResponse<ChallengeSummary[]>> {
   try {

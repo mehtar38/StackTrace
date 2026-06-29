@@ -52,12 +52,13 @@ export async function prewarmSession(
 
 export async function startSession(
   anonToken: string,
+  challengeId: string,
   getToken: () => Promise<string | null>
 ): Promise<Session> {
   const res = await fetch(`${ORCHESTRATOR_URL}/sessions`, {
     method: 'POST',
     headers: await authHeaders(getToken),
-    body: JSON.stringify({ anon_token: anonToken }),
+    body: JSON.stringify({ anon_token: anonToken, challenge_id: challengeId }),
   })
 
   if (!res.ok) {
@@ -164,4 +165,33 @@ export async function resumeSession(
     challengeId: data.challenge_id,
     terminalWSURL: data.terminal_ws_url,
   }
+}
+
+// ── File tree ─────────────────────────────────────────────────────────────────
+// Fetches the live file tree from inside the container.
+// Returns paths relative to /app (e.g. "examples/web-service/index.js")
+
+export interface FileTreeNode {
+  name: string
+  path: string
+  type: 'file' | 'directory'
+  language: string
+}
+
+export async function getFileTree(
+  sessionId: string,
+  getToken: () => Promise<string | null>
+): Promise<FileTreeNode[]> {
+  const res = await fetch(`${ORCHESTRATOR_URL}/sessions/${sessionId}/tree`, {
+    method: 'GET',
+    headers: await authHeaders(getToken),
+  })
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}))
+    throw new Error(body.error ?? `File tree failed: HTTP ${res.status}`)
+  }
+
+  const data = await res.json()
+  return data.files as FileTreeNode[]
 }

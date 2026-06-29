@@ -6,10 +6,11 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
+
+	"stacktrace/orchestrator/internal/db"
 	"stacktrace/orchestrator/internal/redis"
 	"stacktrace/orchestrator/internal/sandbox"
-	"stacktrace/orchestrator/internal/supabase"
-	"time"
 )
 
 // redisSessionKey returns the Redis key for a session's state.
@@ -45,7 +46,7 @@ type RedisSessionState struct {
 type ManagerDeps struct {
 	Provider       sandbox.Provider
 	Redis          *redis.Client
-	Supabase       *supabase.Client
+	DB             *db.Client
 	InactivitySecs int
 	HardLimitSecs  int
 }
@@ -77,7 +78,7 @@ func (m *Manager) Prewarm(ctx context.Context, challengeID, anonToken string) (*
 	}
 
 	// Persist to Supabase
-	session, err := m.deps.Supabase.CreatePrewarmSession(ctx, challengeID, anonToken, info.ID, info.Host)
+	session, err := m.deps.DB.CreatePrewarmSession(ctx, challengeID, anonToken, info.ID, info.Host)
 	if err != nil {
 		// Best-effort: kill the container we just started
 		_ = m.deps.Provider.StopContainer(context.Background(), info.ID)
@@ -90,7 +91,7 @@ func (m *Manager) Prewarm(ctx context.Context, challengeID, anonToken string) (*
 		ChallengeID:   challengeID,
 		ContainerID:   info.ID,
 		ContainerHost: info.Host,
-		Status:        string(supabase.SessionStatusPrewarming),
+		Status:        string(db.SessionStatusPrewarming),
 	}
 	if err := m.deps.Redis.SetJSON(ctx, redisSessionKey(session.ID), state, 300); err != nil {
 		slog.Warn("redis set failed for prewarm state", "session_id", session.ID, "error", err)
@@ -113,14 +114,24 @@ type StartResult struct {
 }
 
 // Start promotes a pre-warmed anonymous session to a real authenticated session.
-// Validates that the anon token maps to a prewarming session, then attaches the user.
+// If no pre-warmed container exists for the anon token (e.g. prewarm failed),
+// it spins up a fresh container on-demand so Start always succeeds.
 func (m *Manager) Start(ctx context.Context, userID, anonToken string) (*StartResult, error) {
 	slog.Info("starting session", "user_id", userID, "anon_token", anonToken[:8]+"...")
 
-	// Promote in Supabase (anon_token is the lookup key)
-	session, err := m.deps.Supabase.PromoteSession(ctx, anonToken, userID)
+	// Try to promote an existing pre-warmed session first
+	session, err := m.deps.DB.PromoteSession(ctx, anonToken, userID)
 	if err != nil {
-		return nil, fmt.Errorf("promote session: %w", err)
+		// No pre-warmed session found — prewarm must have failed.
+		// Fall back: spin up a fresh container on-demand.
+		slog.Warn("no prewarmed session found, starting container on-demand", "anon_token", anonToken[:8])
+
+		// We need the challenge ID but don't have it — look it up from the
+		// anon token Redis key first, then give up gracefully.
+		// For now, require the frontend to pass challenge_id in the start request.
+		// This is handled by the handler passing it through. Return a clear error
+		// so the handler can call StartOnDemand instead.
+		return nil, fmt.Errorf("no prewarmed session for token — use StartOnDemand")
 	}
 
 	now := time.Now().Unix()
@@ -130,23 +141,69 @@ func (m *Manager) Start(ctx context.Context, userID, anonToken string) (*StartRe
 		ChallengeID:   session.ChallengeID,
 		ContainerID:   *session.ContainerID,
 		ContainerHost: *session.ContainerHost,
-		Status:        string(supabase.SessionStatusActive),
+		Status:        string(db.SessionStatusActive),
 		StartedAt:     now,
 		LastActiveAt:  now,
 	}
 
-	// TTL = hard limit so Redis auto-expires if we forget to clean up
 	if err := m.deps.Redis.SetJSON(ctx, redisSessionKey(session.ID), state, m.deps.HardLimitSecs); err != nil {
 		slog.Warn("redis set failed on session start", "session_id", session.ID, "error", err)
 	}
 
-	// Clean up the anon key
 	_ = m.deps.Redis.Del(ctx, redisAnonKey(anonToken))
 
 	return &StartResult{
 		SessionID:     session.ID,
 		ContainerHost: *session.ContainerHost,
 		ChallengeID:   session.ChallengeID,
+	}, nil
+}
+
+// StartOnDemand spins up a fresh container and immediately starts a session.
+// Used as a fallback when prewarm failed or the token was never pre-warmed.
+func (m *Manager) StartOnDemand(ctx context.Context, userID, challengeID string) (*StartResult, error) {
+	slog.Info("starting on-demand container", "user_id", userID, "challenge", challengeID)
+
+	info, err := m.deps.Provider.StartContainer(ctx, challengeID)
+	if err != nil {
+		return nil, fmt.Errorf("start on-demand container: %w", err)
+	}
+
+	time.Sleep(12 * time.Second)
+
+	// Upsert a session record directly as active (no prewarm phase)
+	session, err := m.deps.DB.CreatePrewarmSession(ctx, challengeID, "", info.ID, info.Host)
+	if err != nil {
+		_ = m.deps.Provider.StopContainer(context.Background(), info.ID)
+		return nil, fmt.Errorf("create on-demand session: %w", err)
+	}
+
+	now := time.Now()
+	nowUnix := now.Unix()
+
+	if err := m.deps.DB.UpdateSessionStatus(ctx, session.ID, db.SessionStatusActive, &now, nil); err != nil {
+		_ = m.deps.Provider.StopContainer(context.Background(), info.ID)
+		return nil, fmt.Errorf("activate on-demand session: %w", err)
+	}
+
+	state := RedisSessionState{
+		SessionID:     session.ID,
+		UserID:        userID,
+		ChallengeID:   challengeID,
+		ContainerID:   info.ID,
+		ContainerHost: info.Host,
+		Status:        string(db.SessionStatusActive),
+		StartedAt:     nowUnix,
+		LastActiveAt:  nowUnix,
+	}
+	if err := m.deps.Redis.SetJSON(ctx, redisSessionKey(session.ID), state, m.deps.HardLimitSecs); err != nil {
+		slog.Warn("redis set failed on on-demand session", "session_id", session.ID, "error", err)
+	}
+
+	return &StartResult{
+		SessionID:     session.ID,
+		ContainerHost: info.Host,
+		ChallengeID:   challengeID,
 	}, nil
 }
 
@@ -163,9 +220,9 @@ func (m *Manager) GetState(ctx context.Context, sessionID string) (*RedisSession
 	}
 
 	// Fallback: load from Supabase
-	session, err := m.deps.Supabase.GetSessionByID(ctx, sessionID)
+	session, err := m.deps.DB.GetSessionByID(ctx, sessionID)
 	if err != nil {
-		return nil, fmt.Errorf("supabase get session: %w", err)
+		return nil, fmt.Errorf("aurora get session: %w", err)
 	}
 	if session == nil {
 		return nil, fmt.Errorf("session %s not found", sessionID)
@@ -201,7 +258,7 @@ func (m *Manager) TouchActivity(ctx context.Context, sessionID string) {
 
 	// Async Supabase touch (non-blocking)
 	go func() {
-		if err := m.deps.Supabase.TouchSession(context.Background(), sessionID); err != nil {
+		if err := m.deps.DB.TouchSession(context.Background(), sessionID); err != nil {
 			slog.Warn("touch session failed", "session_id", sessionID, "error", err)
 		}
 	}()
@@ -214,7 +271,7 @@ func (m *Manager) WriteFile(ctx context.Context, sessionID, filePath, content st
 		return err
 	}
 
-	if state.Status != string(supabase.SessionStatusActive) {
+	if state.Status != string(db.SessionStatusActive) {
 		return fmt.Errorf("session %s is not active (status: %s)", sessionID, state.Status)
 	}
 
@@ -268,7 +325,7 @@ func (m *Manager) Exit(ctx context.Context, sessionID string) (*ExitResult, erro
 			slog.Error("failed to read file for exit save", "session_id", sessionID, "file", filePath, "error", err)
 			continue // Save as many as we can; don't abort the whole exit
 		}
-		if err := m.deps.Supabase.UpsertFileDiff(ctx, sessionID, filePath, content); err != nil {
+		if err := m.deps.DB.UpsertFileDiff(ctx, sessionID, filePath, content); err != nil {
 			slog.Error("failed to save file diff", "session_id", sessionID, "file", filePath, "error", err)
 			continue
 		}
@@ -283,7 +340,7 @@ func (m *Manager) Exit(ctx context.Context, sessionID string) (*ExitResult, erro
 		durationSecs = &d
 	}
 
-	if err := m.deps.Supabase.UpdateSessionStatus(ctx, sessionID, supabase.SessionStatusExited, &now, durationSecs); err != nil {
+	if err := m.deps.DB.UpdateSessionStatus(ctx, sessionID, db.SessionStatusExited, &now, durationSecs); err != nil {
 		slog.Error("failed to update session status on exit", "session_id", sessionID, "error", err)
 	}
 
@@ -309,7 +366,7 @@ func (m *Manager) Resume(ctx context.Context, userID, challengeID, previousSessi
 	}
 
 	// Load saved file diffs from Supabase
-	diffs, err := m.deps.Supabase.GetFileDiffs(ctx, previousSessionID)
+	diffs, err := m.deps.DB.GetFileDiffs(ctx, previousSessionID)
 	if err != nil {
 		_ = m.deps.Provider.StopContainer(context.Background(), info.ID)
 		return nil, fmt.Errorf("load file diffs: %w", err)
@@ -324,14 +381,14 @@ func (m *Manager) Resume(ctx context.Context, userID, challengeID, previousSessi
 	}
 
 	// Create a new session record linked to the resumed state
-	session, err := m.deps.Supabase.CreatePrewarmSession(ctx, challengeID, "", info.ID, info.Host)
+	session, err := m.deps.DB.CreatePrewarmSession(ctx, challengeID, "", info.ID, info.Host)
 	if err != nil {
 		_ = m.deps.Provider.StopContainer(context.Background(), info.ID)
 		return nil, fmt.Errorf("create resume session: %w", err)
 	}
 
 	// Immediately promote to active (no prewarm phase for resume)
-	activeSession, err := m.deps.Supabase.PromoteSession(ctx, *session.AnonToken, userID)
+	activeSession, err := m.deps.DB.PromoteSession(ctx, *session.AnonToken, userID)
 	if err != nil {
 		_ = m.deps.Provider.StopContainer(context.Background(), info.ID)
 		return nil, fmt.Errorf("promote resume session: %w", err)
@@ -344,7 +401,7 @@ func (m *Manager) Resume(ctx context.Context, userID, challengeID, previousSessi
 		ChallengeID:   challengeID,
 		ContainerID:   info.ID,
 		ContainerHost: info.Host,
-		Status:        string(supabase.SessionStatusActive),
+		Status:        string(db.SessionStatusActive),
 		StartedAt:     now,
 		LastActiveAt:  now,
 	}
@@ -373,7 +430,7 @@ func (m *Manager) expireSession(ctx context.Context, sessionID, containerID stri
 		slog.Error("failed to stop container on expiry", "container_id", containerID, "error", err)
 	}
 
-	if err := m.deps.Supabase.UpdateSessionStatus(ctx, sessionID, supabase.SessionStatusExpired, &now, durationSecs); err != nil {
+	if err := m.deps.DB.UpdateSessionStatus(ctx, sessionID, db.SessionStatusExpired, &now, durationSecs); err != nil {
 		slog.Error("failed to update session status on expiry", "session_id", sessionID, "error", err)
 	}
 
@@ -398,7 +455,7 @@ func (m *Manager) RunInactivityReaper(ctx context.Context) {
 }
 
 func (m *Manager) reapExpiredSessions(ctx context.Context) {
-	sessions, err := m.deps.Supabase.GetActiveSessions(ctx)
+	sessions, err := m.deps.DB.GetActiveSessions(ctx)
 	if err != nil {
 		slog.Error("inactivity reaper: failed to get active sessions", "error", err)
 		return
@@ -450,7 +507,7 @@ func (m *Manager) RunPrewarmCleanup(ctx context.Context) {
 }
 
 func (m *Manager) reapStalePrwarmSessions(ctx context.Context) {
-	sessions, err := m.deps.Supabase.GetPrewarmingSessions(ctx)
+	sessions, err := m.deps.DB.GetPrewarmingSessions(ctx)
 	if err != nil {
 		slog.Error("prewarm cleanup: failed to get prewarming sessions", "error", err)
 		return
@@ -472,7 +529,7 @@ func (m *Manager) reapStalePrwarmSessions(ctx context.Context) {
 		}
 
 		now := time.Now()
-		_ = m.deps.Supabase.UpdateSessionStatus(ctx, s.ID, supabase.SessionStatusExpired, &now, nil)
+		_ = m.deps.DB.UpdateSessionStatus(ctx, s.ID, db.SessionStatusExpired, &now, nil)
 		_ = m.deps.Redis.Del(ctx, redisSessionKey(s.ID))
 	}
 }
@@ -483,8 +540,21 @@ func (m *Manager) OpenShell(ctx context.Context, sessionID string) (sandbox.Shel
 	if err != nil {
 		return nil, err
 	}
-	if state.Status != string(supabase.SessionStatusActive) {
+	if state.Status != string(db.SessionStatusActive) {
 		return nil, fmt.Errorf("session %s is not active", sessionID)
 	}
 	return m.deps.Provider.ExecShell(ctx, state.ContainerID)
+}
+
+// ExecCommand runs a one-shot command inside the container and returns output.
+// Used by the listFiles handler to run find and get the file tree.
+func (m *Manager) ExecCommand(ctx context.Context, sessionID string, cmd []string) (string, error) {
+	state, err := m.GetState(ctx, sessionID)
+	if err != nil {
+		return "", err
+	}
+	if state.Status != string(db.SessionStatusActive) {
+		return "", fmt.Errorf("session %s is not active", sessionID)
+	}
+	return m.deps.Provider.ExecCommand(ctx, state.ContainerID, cmd)
 }
