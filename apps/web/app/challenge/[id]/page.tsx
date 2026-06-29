@@ -13,8 +13,7 @@ interface ChallengePageProps {
 }
 
 export default async function ChallengePage({ params }: ChallengePageProps) {
-  const { id } = params ?? "01-silent-write"
-  console.log('ChallengePage', id)
+const { id } = await params
 
   // Require auth — redirect to sign-in if not authenticated
   const { userId } = await auth()
@@ -23,7 +22,7 @@ export default async function ChallengePage({ params }: ChallengePageProps) {
   }
 
   const [challengeRes, fileTreeRes] = await Promise.all([
-    getChallengeById("01-silent-write"), //testing
+    getChallengeById(id),
     getChallengeFileTree(id),
   ])
 
