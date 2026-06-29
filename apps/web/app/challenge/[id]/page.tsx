@@ -13,7 +13,7 @@ interface ChallengePageProps {
 }
 
 export default async function ChallengePage({ params }: ChallengePageProps) {
-  const { id } = params
+  const { id } = params ?? "01-silent-write"
   console.log('ChallengePage', id)
 
   // Require auth — redirect to sign-in if not authenticated
