@@ -1,16 +1,18 @@
 # ─── Base ────────────────────────────────────────────────────────────────────
-FROM node:18-alpine
+FROM node:24-slim
 
-RUN addgroup -S stacktrace && adduser -S stacktrace -G stacktrace
+RUN groupadd -r stacktrace && useradd -r -g stacktrace stacktrace
 
-RUN apk add --no-cache curl jq
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl jq ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 # ─── Dependencies ─────────────────────────────────────────────────────────────
 # Copy the entire Express repo — the example requires the parent package
 COPY app/express/package*.json ./
-RUN npm install
+RUN npm install --omit=dev
 
 # ─── App code ─────────────────────────────────────────────────────────────────
 COPY app/express/ .
@@ -21,7 +23,4 @@ RUN chown -R stacktrace:stacktrace /app
 USER stacktrace
 
 EXPOSE 3000
-
-# Run from repo root so require('../../') resolves correctly
-# This points to the example which is where the bug lives
 CMD ["node", "examples/web-service/index.js"]

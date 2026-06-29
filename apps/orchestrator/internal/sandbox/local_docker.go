@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net"
 	"strings"
 	"time"
 
@@ -145,7 +144,7 @@ func (p *localDockerProvider) StartContainer(ctx context.Context, challengeID st
 	prewarmCtx, cancel := context.WithTimeout(ctx, time.Duration(p.cfg.PrewarmTimeoutSecs)*time.Second)
 	defer cancel()
 
-	if err := p.waitUntilHealthy(prewarmCtx, host); err != nil {
+	if err := waitUntilHealthyTCP(prewarmCtx, host); err != nil {
 		_ = p.docker.ContainerRemove(context.Background(), containerID, container.RemoveOptions{Force: true})
 		return nil, fmt.Errorf("container health check failed: %w", err)
 	}
@@ -232,27 +231,6 @@ func (p *localDockerProvider) ListManagedContainers(ctx context.Context) ([]type
 		All:     true,
 		Filters: f,
 	})
-}
-
-func (p *localDockerProvider) waitUntilHealthy(ctx context.Context, host string) error {
-	// TCP probe — dial the port directly instead of hitting an HTTP endpoint.
-	// This works for any challenge app regardless of its route structure,
-	// so we never need to modify open source codebases to add /healthz routes.
-	for {
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("timed out waiting for container at %s: %w", host, ctx.Err())
-		default:
-		}
-
-		conn, err := net.DialTimeout("tcp", host, 2*time.Second)
-		if err == nil {
-			conn.Close()
-			return nil
-		}
-
-		time.Sleep(healthCheckInterval)
-	}
 }
 
 func contentToTar(relativePath, content string) (io.Reader, error) {

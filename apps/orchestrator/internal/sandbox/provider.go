@@ -3,6 +3,8 @@ package sandbox
 import (
 	"context"
 	"fmt"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
 )
 
 type ContainerInfo struct {
@@ -14,6 +16,15 @@ type ProviderConfig struct {
 	ChallengesDir        string
 	PrewarmTimeoutSecs   int
 	ContainerTimeoutSecs int
+
+	// AWS ECS — only used by awsECSProvider, ignored by localDockerProvider.
+	AWSConfig           aws.Config
+	ECSClusterName      string
+	ECSSubnetID         string
+	ECSSecurityGroupID  string
+	ECSTaskRoleArn      string
+	ECSExecutionRoleArn string
+	ECRRegistryURL      string
 }
 
 // Provider is the interface every sandbox backend must implement.

@@ -1,6 +1,5 @@
 'use client'
 
-// hooks/useSession.ts
 // Owns the entire session lifecycle: prewarm → start → active → exit.
 // ChallengeIDE consumes this hook; no session logic lives in components.
 
@@ -39,7 +38,8 @@ interface UseSessionReturn {
   startChallenge: () => Promise<void>
   exitChallenge: () => Promise<void>
   writeFile: (path: string, content: string) => void
-  readFile: (path: string) => Promise<string>
+  // readFile: (path: string) => Promise<string>
+  readFileWithToken: (path: string, token: string) => Promise<string>
   getFileTree: () => Promise<unknown>
 }
 
@@ -112,10 +112,15 @@ export function useSession(challengeId: string): UseSessionReturn {
   }, [session, status, getToken])
 
   // ── Read file ───────────────────────────────────────────────────────────────
-  const readFile = useCallback(async (path: string): Promise<string> => {
-    if (!session) throw new Error('No active session')
-    return apiReadFile(session.sessionId, path, getToken)
-  }, [session, getToken])
+  // const readFile = useCallback(async (path: string): Promise<string> => {
+  //   if (!session) throw new Error('No active session')
+  //   return apiReadFile(session.sessionId, path, getToken)
+  // }, [session, getToken])
+
+  const readFileWithToken = useCallback(async (path: string, token: string): Promise<string> => {
+  if (!session) throw new Error('No active session')
+  return apiReadFile(session.sessionId, path, async () => token)
+}, [session])
 
   const getFileTree = useCallback(async () => {
   if (!session) throw new Error('No active session')
@@ -147,5 +152,5 @@ export function useSession(challengeId: string): UseSessionReturn {
     }
   }, [])
 
-  return { session, status, error, startChallenge, exitChallenge, writeFile, readFile, getFileTree }
+  return { session, status, error, startChallenge, exitChallenge, writeFile, readFileWithToken, getFileTree }
 }
