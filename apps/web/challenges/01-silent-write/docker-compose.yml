@@ -1,0 +1,21 @@
+services:
+  challenge:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: stacktrace-01
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+    networks:
+      - sandbox
+    restart: "no"
+ 
+networks:
+  sandbox:
+    driver: bridge
+    # internal: true is removed — was blocking host access during dev
+    # internet egress will be blocked at Azure Container Apps network policy level in production
+ 

@@ -3,7 +3,7 @@ import fs from 'fs'
 import path from 'path'
 import type { ChallengeSummary } from '@/lib/types'
 
-const CHALLENGES_DIR = path.join(process.cwd(), '..', '..', 'challenges')
+const CHALLENGES_DIR = path.join(process.cwd(), 'challenges')
 
 export async function GET() {
   try {

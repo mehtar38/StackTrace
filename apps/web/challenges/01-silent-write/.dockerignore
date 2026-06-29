@@ -1,0 +1,33 @@
+# Don't copy these into the Docker image
+
+# Git history — we'll plant our own fake history
+.git/
+.gitignore
+
+# Node dependencies — reinstalled inside container via npm install
+node_modules/
+
+# Docker files themselves
+Dockerfile
+docker-compose.yml
+docker-compose.override.yml
+
+# Challenge metadata — platform reads this, user shouldn't see it
+challenge.json
+CHALLENGE.md
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Environment — we provide our own inside the container
+.env
+.env.*

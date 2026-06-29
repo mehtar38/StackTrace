@@ -4,7 +4,7 @@ import path from 'path'
 import type { Challenge } from '@/lib/types'
 
 // Resolves to /challenges directory at monorepo root
-const CHALLENGES_DIR = path.join(process.cwd(), '..', '..', 'challenges')
+const CHALLENGES_DIR = path.join(process.cwd(), 'challenges')
 
 export async function GET(
   _req: Request,
