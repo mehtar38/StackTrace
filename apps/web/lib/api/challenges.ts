@@ -22,20 +22,22 @@ export async function getChallenges(): Promise<ApiResponse<ChallengeSummary[]>> 
 
     return res.json()
   }
-export async function getChallengeById(id: string) {
-  const baseUrl = process.env.NEXT_PUBLIC_APP_URL
-    ?? (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000')
-    console.log('getChallengesByID baseUrl:', process.env.VERCEL_URL, baseUrl)
 
-  const res = await fetch(`${baseUrl}/api/challenges/${id}`, { next: { revalidate: 0 }
-  })
-  console.log('STATUS:', res.status)
-  const text = await res.text()
-console.log('BODY START:', text.slice(0, 200))
+export async function getChallengeById(id: string): Promise<ApiResponse<Challenge>> {
+  try {
+    const baseUrl = process.env.NEXT_PUBLIC_APP_URL
+      ?? (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000')
 
-  return res.json()
-  
+    const res = await fetch(`${baseUrl}/api/challenges/${id}`, {
+      next: { revalidate: 0 },
+    })
+    return res.json()
+  } catch (e) {
+    console.log('FETCH ERROR:', e)
+    return { data: null, error: { code: 'FETCH_ERROR', message: 'Failed to load challenge' } }
+  }
 }
+
 // File system — mock until orchestrator is ready
 export async function getChallengeFileTree(challengeId: string): Promise<ApiResponse<FileNode[]>> {
   void challengeId
