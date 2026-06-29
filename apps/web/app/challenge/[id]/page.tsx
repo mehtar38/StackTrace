@@ -22,13 +22,29 @@ const { id } = await params
     redirect(`/sign-in?redirect_url=/challenge/${id}`)
   }
 
-  const [challengeRes, fileTreeRes] = await Promise.all([
-    getChallengeById(id),
-    getChallengeFileTree(id),
-  ])
+  // const [challengeRes, fileTreeRes] = await Promise.all([
+  //   getChallengeById(id),
+  //   getChallengeFileTree(id),
+  // ])
 
-  if (challengeRes.error || !challengeRes.data) notFound()
-  if (fileTreeRes.error || !fileTreeRes.data) notFound()
+  // if (challengeRes.error || !challengeRes.data) notFound()
+  // if (fileTreeRes.error || !fileTreeRes.data) notFound()
+
+  let challengeRes
+try {
+  challengeRes = await getChallengeById(id)
+} catch (err) {
+  console.error('getChallengeById CRASHED:', err)
+  throw err
+}
+
+let fileTreeRes
+try {
+  fileTreeRes = await getChallengeFileTree(id)
+} catch (err) {
+  console.error('getChallengeFileTree CRASHED:', err)
+  throw err
+}
 
   // File CONTENTS are intentionally not loaded here.
   // ChallengeIDE will fetch them from the orchestrator after the session starts.
