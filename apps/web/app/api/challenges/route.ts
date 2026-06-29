@@ -3,6 +3,7 @@ import fs from 'fs'
 import path from 'path'
 import type { ChallengeSummary } from '@/lib/types'
 
+export const dynamic = 'force-dynamic'
 const CHALLENGES_DIR = path.join(process.cwd(), 'challenges')
 
 export async function GET() {

@@ -11,13 +11,14 @@ import { MOCK_FILE_CONTENTS, MOCK_FILE_TREE } from '@/lib/mock/challenges'
 export async function getChallenges(): Promise<ApiResponse<ChallengeSummary[]>> {
     const baseUrl = process.env.NEXT_PUBLIC_APP_URL
     ?? (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000')
+    console.log('getChallenges baseUrl:', process.env.VERCEL_URL, baseUrl)
 
     if (!baseUrl) {
       throw new Error('NEXT_PUBLIC_VERCEL_URL is not set')
     }
 
     const res = await fetch(`${baseUrl}/api/challenges`, {
-      next: { revalidate: 60 },
+      next: { revalidate: 0 },
     })
 
     return res.json()
