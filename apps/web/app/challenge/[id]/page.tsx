@@ -13,7 +13,6 @@ interface ChallengePageProps {
 }
 
 export default async function ChallengePage({ params }: ChallengePageProps) {
-    try {
 const { id } = await params
 
   // Require auth — redirect to sign-in if not authenticated
@@ -46,6 +45,9 @@ try {
   throw err
 }
 
+  if (!challengeRes?.data) notFound()
+  if (!fileTreeRes?.data) notFound()
+
   // File CONTENTS are intentionally not loaded here.
   // ChallengeIDE will fetch them from the orchestrator after the session starts.
   return (
@@ -54,8 +56,4 @@ try {
       fileTree={fileTreeRes.data}
     />
   )
-}  catch (err) {
-    console.error('CHALLENGE PAGE CRASHED:', err)
-    throw err
-  }
 }
