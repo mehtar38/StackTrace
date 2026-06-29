@@ -13,6 +13,7 @@ import {
   readFile as apiReadFile,
   getFileTree as apiGetFileTree,
   FileTreeNode,
+  resumeSession,
 } from '@/lib/api/orchestrator'
 import type { Session, SessionStatus } from '@/lib/types'
 
@@ -77,6 +78,20 @@ export function useSession(challengeId: string): UseSessionReturn {
 
   // ── Start challenge ─────────────────────────────────────────────────────────
   const startChallenge = useCallback(async () => {
+    const lastSessionId = localStorage.getItem(`st_last_session_${challengeId}`)
+if (lastSessionId) {
+  try {
+    const token = await getToken()
+    if (!token) throw new Error('no token')
+    const resumed = await resumeSession(lastSessionId, challengeId, getToken)
+    setSession(resumed)
+    setStatus('active')
+    localStorage.removeItem(`st_last_session_${challengeId}`)
+    return
+  } catch (e) {
+    console.warn('resume failed, falling back to fresh start', e)
+  }
+}
     setError(null)
     setStatus('prewarming') // spinner only appears NOW, when user clicked
 
@@ -138,12 +153,13 @@ export function useSession(challengeId: string): UseSessionReturn {
     try {
       await apiExitSession(session.sessionId, getToken)
       setStatus('exited')
+      localStorage.setItem(`st_last_session_${challengeId}`, session.sessionId)
       setSession(null)
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Exit failed'
       setError(message)
     }
-  }, [session, getToken])
+  }, [session, getToken, challengeId])
 
   // ── Cleanup on unmount ──────────────────────────────────────────────────────
   useEffect(() => {

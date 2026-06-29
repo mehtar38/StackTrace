@@ -169,7 +169,7 @@ func (m *Manager) StartOnDemand(ctx context.Context, userID, challengeID string)
 		return nil, fmt.Errorf("start on-demand container: %w", err)
 	}
 
-	time.Sleep(12 * time.Second)
+	time.Sleep(17 * time.Second)
 
 	// Upsert a session record directly as active (no prewarm phase)
 	session, err := m.deps.DB.CreatePrewarmSession(ctx, challengeID, "", info.ID, info.Host)
