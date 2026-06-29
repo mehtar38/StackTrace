@@ -22,6 +22,7 @@ async function authHeaders(getToken: () => Promise<string | null>): Promise<Head
   return {
     'Content-Type': 'application/json',
     Authorization: `Bearer ${token}`,
+    'ngrok-skip-browser-warning': 'true',
   }
 }
 
@@ -34,7 +35,7 @@ export async function prewarmSession(
 ): Promise<{ sessionId: string }> {
   const res = await fetch(`${ORCHESTRATOR_URL}/prewarm`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true',},
     body: JSON.stringify({ challenge_id: challengeId, anon_token: anonToken }),
   })
 
