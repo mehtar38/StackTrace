@@ -9,11 +9,11 @@ import { ChallengeIDE } from '@/components/challenge/ChallengeIDE'
 import { getChallengeById, getChallengeFileTree } from '@/lib/api/challenges'
 
 interface ChallengePageProps {
-  params: Promise<{ id: string }>
+  params: { id: string }
 }
 
 export default async function ChallengePage({ params }: ChallengePageProps) {
-  const { id } = await params
+  const { id } = params
 
   // Require auth — redirect to sign-in if not authenticated
   const { userId } = await auth()
