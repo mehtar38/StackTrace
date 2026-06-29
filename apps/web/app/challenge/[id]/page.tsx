@@ -13,6 +13,7 @@ interface ChallengePageProps {
 }
 
 export default async function ChallengePage({ params }: ChallengePageProps) {
+    try {
 const { id } = await params
 
   // Require auth — redirect to sign-in if not authenticated
@@ -37,4 +38,8 @@ const { id } = await params
       fileTree={fileTreeRes.data}
     />
   )
+}  catch (err) {
+    console.error('CHALLENGE PAGE CRASHED:', err)
+    throw err
+  }
 }
