@@ -93,7 +93,7 @@ func (p *awsECSProvider) StartContainer(ctx context.Context, challengeID string)
 		return nil, fmt.Errorf("wait for exec agent: %w", err)
 	}
 	slog.Info("exec agent ready", "task_arn", taskArn)
-	time.Sleep(12 * time.Second)
+	// time.Sleep(12 * time.Second)
 
 	host := fmt.Sprintf("%s:3000", privateIP)
 
