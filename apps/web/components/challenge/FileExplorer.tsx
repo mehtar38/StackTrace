@@ -1,5 +1,6 @@
 'use client'
 
+import { FileLanguage, FileNode } from '@/lib/types'
 import { useMemo, useState } from 'react'
 import { getIconForFile, getIconForFolder } from 'vscode-icons-js'
 
@@ -12,19 +13,13 @@ interface FlatEntry {
   type: string // 'file' | 'directory'
   language?: string
 }
-
-interface TreeNode {
-  name: string
-  path: string
-  type: 'file' | 'directory'
-  language: string
+interface TreeNode extends FileNode {
   children: TreeNode[]
 }
-
 interface FileExplorerProps {
   files: FlatEntry[]
   selectedPath: string | null
-  onSelect: (file: { name: string; path: string; type: string; language?: string }) => void
+  onSelect: (file: TreeNode) => void
   isLocked: boolean
 }
 
@@ -54,7 +49,7 @@ function buildTree(flat: FlatEntry[]): TreeNode[] {
       name: entry.name,
       path: entry.path,
       type: entry.type === 'directory' ? 'directory' : 'file',
-      language: entry.language ?? 'plaintext',
+      language: (entry.language ?? 'plaintext') as FileLanguage,
       children: [],
     }
 
@@ -177,7 +172,7 @@ function TreeRow({
   isLocked: boolean
   expanded: Set<string>
   onToggleDir: (path: string) => void
-  onSelect: (file: { name: string; path: string; type: string; language?: string }) => void
+  onSelect:  (file: TreeNode) => void
 }) {
   const isDir = node.type === 'directory'
   const isOpen = expanded.has(node.path)
