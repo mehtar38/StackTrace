@@ -11,12 +11,13 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params
-// console.log('DIRS:', fs.readdirSync(CHALLENGES_DIR))
-// const challengePath = path.join(CHALLENGES_DIR, id, 'challenge.json')
-// console.log('LOOKING FOR:', challengePath)
-// console.log('FILE EXISTS:', fs.existsSync(challengePath))
+
   try {
     const challengePath = path.join(CHALLENGES_DIR, id, 'challenge.json')
+
+    console.log('CHALLENGES_DIR:', CHALLENGES_DIR)
+    console.log('Looking for:', challengePath)
+    console.log('File exists:', fs.existsSync(challengePath))
 
     if (!fs.existsSync(challengePath)) {
       return NextResponse.json(
@@ -29,7 +30,8 @@ export async function GET(
     const challenge: Challenge = JSON.parse(raw)
 
     return NextResponse.json({ data: challenge, error: null })
-  } catch {
+  } catch (err) {
+    console.error('API ROUTE CRASHED:', err)
     return NextResponse.json(
       { data: null, error: { code: 'PARSE_ERROR', message: 'Failed to read challenge' } },
       { status: 500 }
