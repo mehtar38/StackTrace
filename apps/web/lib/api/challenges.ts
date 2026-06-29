@@ -21,6 +21,7 @@ export async function getChallenges(): Promise<ApiResponse<ChallengeSummary[]>> 
   }
 }
 export async function getChallengeById(id: string): Promise<ApiResponse<Challenge>> {
+  console.log('getChallengeById', id)
   try {
     const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000'
     const res = await fetch(`${baseUrl}/api/challenges/${id}`, { next: { revalidate: 60 } })
@@ -33,6 +34,7 @@ export async function getChallengeById(id: string): Promise<ApiResponse<Challeng
 
 // File system — mock until orchestrator is ready
 export async function getChallengeFileTree(challengeId: string): Promise<ApiResponse<FileNode[]>> {
+  console.log('getChallengeFileTree', challengeId)
   void challengeId
   return { data: MOCK_FILE_TREE, error: null }
 }
