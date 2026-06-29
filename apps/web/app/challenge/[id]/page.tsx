@@ -14,6 +14,7 @@ interface ChallengePageProps {
 
 export default async function ChallengePage({ params }: ChallengePageProps) {
   const { id } = params
+  console.log('ChallengePage', id)
 
   // Require auth — redirect to sign-in if not authenticated
   const { userId } = await auth()
