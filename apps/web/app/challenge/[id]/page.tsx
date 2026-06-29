@@ -23,7 +23,7 @@ export default async function ChallengePage({ params }: ChallengePageProps) {
   }
 
   const [challengeRes, fileTreeRes] = await Promise.all([
-    getChallengeById(id),
+    getChallengeById("01-silent-write"), //testing
     getChallengeFileTree(id),
   ])
 
