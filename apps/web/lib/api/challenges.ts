@@ -27,7 +27,6 @@ export async function getChallengeById(id: string) {
     ?? (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000')
 
   const res = await fetch(`${baseUrl}/api/challenges/${id}`, {
-    next: { revalidate: 60 },
   })
 
   return res.json()
