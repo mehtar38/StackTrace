@@ -12,6 +12,7 @@ import {
   exitSession as apiExitSession,
   readFile as apiReadFile,
   getFileTree as apiGetFileTree,
+  FileTreeNode,
 } from '@/lib/api/orchestrator'
 import type { Session, SessionStatus } from '@/lib/types'
 
@@ -40,7 +41,7 @@ interface UseSessionReturn {
   writeFile: (path: string, content: string) => void
   // readFile: (path: string) => Promise<string>
   readFileWithToken: (path: string, token: string) => Promise<string>
-  getFileTree: () => Promise<unknown>
+  getFileTree: () => Promise<FileTreeNode[]>
 }
 
 export function useSession(challengeId: string): UseSessionReturn {

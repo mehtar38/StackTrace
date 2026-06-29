@@ -3,6 +3,7 @@
 import { useMemo, useState } from 'react'
 import { getIconForFile, getIconForFolder } from 'vscode-icons-js'
 
+
 // Accept either the static FileNode shape or the orchestrator's FileTreeNode
 // shape — both have name/path/type, which is all the tree builder needs.
 interface FlatEntry {
